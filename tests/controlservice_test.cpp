@@ -214,8 +214,19 @@ int runInner()
         }
     }
 
+    // 9. The conflict helper. A key held only by our own component is not a
+    //    conflict: globalShortcutsByKey() reports our own registration as a
+    //    holder, which is exactly what made isGlobalShortcutAvailable() lie.
+    const QString ourComponent = QStringLiteral(KSHADOWLRC_APP_ID);
+    CHECK(!shortcutHeldByAnotherComponent({}, ourComponent));
+    CHECK(!shortcutHeldByAnotherComponent({ourComponent}, ourComponent));
+    CHECK(shortcutHeldByAnotherComponent({ourComponent, QStringLiteral("kwin")}, ourComponent));
+    CHECK(shortcutHeldByAnotherComponent({QStringLiteral("kwin")}, ourComponent));
+
     if (g_failures == 0) {
-        std::printf("controlservice_test: all checks passed (actions, offset step/clamp/reset, signals, overlay toggle, tray tool tip + shared menu)\n");
+        std::printf(
+            "controlservice_test: all checks passed (actions, offset step/clamp/reset, signals, overlay toggle, tray tool tip + shared menu,"
+            " conflict helper)\n");
         return 0;
     }
     std::fprintf(stderr, "controlservice_test: %d check(s) failed\n", g_failures);

@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 QT_BEGIN_NAMESPACE
 class QAction;
@@ -87,5 +88,16 @@ private:
     QMenu *m_menu = nullptr;
     bool m_overlayVisible = true;
 };
+
+/*!
+ * Whether \a holderComponents (the componentUniqueName()s KGlobalAccel reports
+ * for a key) include a component other than \a ourComponent.
+ *
+ * KGlobalAccel::isGlobalShortcutAvailable() does not exclude the component
+ * passed to it, so a key this application registered itself is reported as
+ * taken on every later start. Asking globalShortcutsByKey() for the actual
+ * holders and comparing their names tells a real conflict from our own entry.
+ */
+bool shortcutHeldByAnotherComponent(const QStringList &holderComponents, const QString &ourComponent);
 
 } // namespace kshadowlrc

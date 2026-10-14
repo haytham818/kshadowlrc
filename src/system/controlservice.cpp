@@ -76,6 +76,13 @@ QString offsetLabel(qint64 ms)
 
 } // namespace
 
+bool shortcutHeldByAnotherComponent(const QStringList &holderComponents, const QString &ourComponent)
+{
+    return std::any_of(holderComponents.cbegin(), holderComponents.cend(), [&ourComponent](const QString &holder) {
+        return holder != ourComponent;
+    });
+}
+
 ControlService::ControlService(LyricsController *controller, QObject *parent)
     : QObject(parent)
     , m_controller(controller)
@@ -191,11 +198,23 @@ void ControlService::registerShortcut(QAction *action, const QKeySequence &seque
     if (!action) {
         return;
     }
-    // Warn but do not steal: a key another component already holds is the
-    // user's to reassign, not ours to take.
-    if (!KGlobalAccel::isGlobalShortcutAvailable(sequence, QStringLiteral(KSHADOWLRC_APP_ID))) {
+    const QString ourComponent = QStringLiteral(KSHADOWLRC_APP_ID);
+
+    // globalShortcutsByKey() reports our own registration as a holder, so
+    // filter it out: only a different component is a real conflict. Warn but do
+    // not steal -- the key is the user's to reassign, not ours to take.
+    const QList<KGlobalShortcutInfo> holders = KGlobalAccel::globalShortcutsByKey(sequence, KGlobalAccel::Equal);
+    QStringList holderComponents;
+    QStringList otherComponents;
+    for (const KGlobalShortcutInfo &holder : holders) {
+        holderComponents.append(holder.componentUniqueName());
+        if (holder.componentUniqueName() != ourComponent) {
+            otherComponents.append(QStringLiteral("%1 (%2)").arg(holder.componentUniqueName(), holder.componentFriendlyName()));
+        }
+    }
+    if (shortcutHeldByAnotherComponent(holderComponents, ourComponent)) {
         qCWarning(lcSystem) << "global shortcut" << sequence.toString() << "for" << action->objectName()
-                            << "is already taken by another component; not stealing it";
+                            << "is already taken by other components:" << otherComponents.join(QStringLiteral(", ")) << "; not stealing it";
     }
 
     auto *kga = KGlobalAccel::self();
