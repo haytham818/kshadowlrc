@@ -117,10 +117,13 @@ maximum either way; both numbers are `OffsetStepMs` and `MaxOffsetMs` in
 
 ## Tests
 
-`ctest --test-dir build` runs them. They are deterministic and offline: the
-parsers are driven with saved fixtures, and the tests that need a session bus
-start a private one, so nothing reaches the network and nothing touches the
-session you are logged into.
+They use Qt Test: every `tests/*.cpp` is one test class and one CTest entry,
+registered by ECM's `ecm_add_tests`. `ctest --test-dir build` runs them all and
+`ctest --test-dir build -R <name> -V` runs one and prints every check.
+
+They are deterministic and offline: the parsers are driven with saved fixtures,
+and the tests that need a session bus start a private one, so nothing reaches
+the network and nothing touches the session you are logged into.
 
 ## License
 

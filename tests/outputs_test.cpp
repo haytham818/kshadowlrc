@@ -16,65 +16,74 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QStringList>
-
-#include <cstdio>
+#include <QTest>
 
 using namespace kshadowlrc;
 
-namespace
+class OutputsTest : public QObject
 {
+    Q_OBJECT
 
-int g_failures = 0;
+private Q_SLOTS:
+    void initTestCase();
+    void primaryFirstAndDuplicateFree();
+    void matchesTheConnectedScreens();
+    void stableAcrossInstances();
 
-void check(bool condition, const char *what)
+private:
+    Outputs m_outputs;
+    QStringList m_names;
+    QString m_primary;
+};
+
+void OutputsTest::initTestCase()
 {
-    if (!condition) {
-        std::fprintf(stderr, "FAIL: %s\n", what);
-        ++g_failures;
+    m_names = m_outputs.names();
+    m_primary = m_outputs.primaryName();
+}
+
+void OutputsTest::primaryFirstAndDuplicateFree()
+{
+    QVERIFY2(!m_names.isEmpty(), "at least one output is listed");
+    // The first entry is the primary output's name; offscreen's single screen is
+    // unnamed, so this is also the empty-string case.
+    QVERIFY2(m_names.first() == m_primary, "the primary output is listed first");
+    QVERIFY2(m_names.contains(m_primary), "the primary output is in the list");
+
+    // No duplicates: every entry is a distinct screen.
+    for (int i = 0; i < m_names.size(); ++i) {
+        for (int j = i + 1; j < m_names.size(); ++j) {
+            QVERIFY2(m_names.at(i) != m_names.at(j), "no output name appears twice");
+        }
     }
 }
 
-} // namespace
+void OutputsTest::matchesTheConnectedScreens()
+{
+    // One entry per connected screen, and the primary name is Qt's own.
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    QVERIFY2(m_names.size() == screens.size(), "one entry per connected screen");
+    QVERIFY2(QGuiApplication::primaryScreen() != nullptr, "the offscreen platform has a primary screen");
+    if (QGuiApplication::primaryScreen()) {
+        QVERIFY2(m_primary == QGuiApplication::primaryScreen()->name(), "primaryName() is the primary QScreen's name");
+    }
+}
+
+void OutputsTest::stableAcrossInstances()
+{
+    // The object keeps no state between calls: a second instance agrees.
+    Outputs other;
+    QVERIFY2(other.names() == m_names, "two Outputs instances report the same list");
+    QVERIFY2(other.primaryName() == m_primary, "two Outputs instances agree on the primary");
+}
 
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
     QGuiApplication app(argc, argv);
 
-    Outputs outputs;
-    const QStringList names = outputs.names();
-    const QString primary = outputs.primaryName();
-
-    check(!names.isEmpty(), "at least one output is listed");
-    // The first entry is the primary output's name; offscreen's single screen is
-    // unnamed, so this is also the empty-string case.
-    check(names.first() == primary, "the primary output is listed first");
-    check(names.contains(primary), "the primary output is in the list");
-
-    // No duplicates: every entry is a distinct screen.
-    for (int i = 0; i < names.size(); ++i) {
-        for (int j = i + 1; j < names.size(); ++j) {
-            check(names.at(i) != names.at(j), "no output name appears twice");
-        }
-    }
-
-    // One entry per connected screen, and the primary name is Qt's own.
-    const QList<QScreen *> screens = QGuiApplication::screens();
-    check(names.size() == screens.size(), "one entry per connected screen");
-    check(QGuiApplication::primaryScreen() != nullptr, "the offscreen platform has a primary screen");
-    if (QGuiApplication::primaryScreen()) {
-        check(primary == QGuiApplication::primaryScreen()->name(), "primaryName() is the primary QScreen's name");
-    }
-
-    // The object keeps no state between calls: a second instance agrees.
-    Outputs other;
-    check(other.names() == names, "two Outputs instances report the same list");
-    check(other.primaryName() == primary, "two Outputs instances agree on the primary");
-
-    if (g_failures == 0) {
-        std::printf("outputs_test: primary-first, duplicate-free list, one entry per screen, agreed across instances\n");
-        return 0;
-    }
-    std::fprintf(stderr, "outputs_test: %d check(s) failed\n", g_failures);
-    return 1;
+    OutputsTest tc;
+    return QTest::qExec(&tc, argc, argv);
 }
+
+#include "outputs_test.moc"

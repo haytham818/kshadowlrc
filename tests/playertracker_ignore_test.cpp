@@ -22,6 +22,7 @@
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
+#include <QTest>
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
@@ -36,22 +37,6 @@ namespace
 
 // Mirrors mprisplayer.h; kept local so the test does not depend on the wrapper.
 const char kMprisObjectPath[] = "/org/mpris/MediaPlayer2";
-
-int g_failures = 0;
-
-void report(bool condition, const QString &what)
-{
-    QTextStream out(stdout);
-    out << (condition ? QStringLiteral("ok:   ") : QStringLiteral("FAIL: ")) << what << Qt::endl;
-    if (!condition) {
-        ++g_failures;
-    }
-}
-
-void check(bool condition, const char *what)
-{
-    report(condition, QString::fromUtf8(what));
-}
 
 /*! A minimal in-process MPRIS player, playing from the moment it appears. */
 class FakePlayer : public QObject
@@ -89,25 +74,33 @@ public:
     }
 };
 
-int runInner()
+} // namespace
+
+class PlayerTrackerIgnoreTest : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void inner();
+};
+
+void PlayerTrackerIgnoreTest::inner()
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.isConnected()) {
         QTextStream(stdout) << "SKIP: session bus unavailable" << Qt::endl;
-        return 0;
+        return;
     }
 
     const QString serviceName = QStringLiteral("org.mpris.MediaPlayer2.kshadowlrc_ignore_test");
     if (!bus.registerService(serviceName)) {
-        QTextStream(stdout) << "FAIL: could not register " << serviceName << Qt::endl;
-        return 1;
+        QFAIL(qPrintable(QStringLiteral("could not register %1").arg(serviceName)));
     }
 
     FakePlayer fake;
     if (!bus.registerObject(QString::fromLatin1(kMprisObjectPath), &fake, QDBusConnection::ExportAllContents)) {
-        QTextStream(stdout) << "FAIL: could not export the fake player" << Qt::endl;
         bus.unregisterService(serviceName);
-        return 1;
+        QFAIL("could not export the fake player");
     }
 
     // The name the test ignores. It is deliberately a bare segment, and the
@@ -137,31 +130,31 @@ int runInner()
 
     steps.push_back({0, [&] {
                          tracker.setIgnoredPlayers({});
-                         check(tracker.ignoredPlayers().isEmpty(), "an empty ignore list is stored and read back as empty");
+                         QVERIFY2(tracker.ignoredPlayers().isEmpty(), "an empty ignore list is stored and read back as empty");
                          tracker.start();
                      }});
 
     // An empty list ignores nothing, so the sole player is picked up as usual.
     steps.push_back({300, [&] {
-                         check(tracker.hasPlayer(), "empty list ignores nothing: the only player is selected");
-                         check(tracker.playerName() == serviceName, "the selected player is the fake");
-                         check(connectedA == 1, "playerConnected emitted once");
+                         QVERIFY2(tracker.hasPlayer(), "empty list ignores nothing: the only player is selected");
+                         QVERIFY2(tracker.playerName() == serviceName, "the selected player is the fake");
+                         QVERIFY2(connectedA == 1, "playerConnected emitted once");
                      }});
 
     // (b) Ignore the currently-playing, sole player. No NameOwnerChanged or any
     // other bus event is delivered between this call and the assertions.
     steps.push_back({0, [&] {
                          tracker.setIgnoredPlayers({ignoreEntry});
-                         check(tracker.ignoredPlayers() == QStringList{ignoreEntry}, "the ignore list is stored and read back");
-                         check(!tracker.hasPlayer(), "ignoring the active player drops it synchronously, with no bus event");
-                         check(disconnectedA == 1, "playerDisconnected emitted on the runtime change");
+                         QVERIFY2(tracker.ignoredPlayers() == QStringList{ignoreEntry}, "the ignore list is stored and read back");
+                         QVERIFY2(!tracker.hasPlayer(), "ignoring the active player drops it synchronously, with no bus event");
+                         QVERIFY2(disconnectedA == 1, "playerDisconnected emitted on the runtime change");
                      }});
 
     // (c) The immediate re-scan must not bring the ignored player back.
     steps.push_back({300, [&] {
-                         check(!tracker.hasPlayer(), "the ignored player is not selected again by the immediate re-scan");
-                         check(connectedA == 1, "no second playerConnected after the re-scan");
-                         check(disconnectedA == 1, "no extra disconnect");
+                         QVERIFY2(!tracker.hasPlayer(), "the ignored player is not selected again by the immediate re-scan");
+                         QVERIFY2(connectedA == 1, "no second playerConnected after the re-scan");
+                         QVERIFY2(disconnectedA == 1, "no extra disconnect");
                      }});
 
     // Clearing the list must let the player through again, still without a bus
@@ -171,9 +164,9 @@ int runInner()
                      }});
 
     steps.push_back({300, [&] {
-                         check(tracker.hasPlayer(), "clearing the list picks the player back up without a bus event");
-                         check(tracker.playerName() == serviceName, "the re-selected player is the fake");
-                         check(connectedA == 2, "playerConnected emitted again after the player is allowed again");
+                         QVERIFY2(tracker.hasPlayer(), "clearing the list picks the player back up without a bus event");
+                         QVERIFY2(tracker.playerName() == serviceName, "the re-selected player is the fake");
+                         QVERIFY2(connectedA == 2, "playerConnected emitted again after the player is allowed again");
                      }});
 
     // (a) A tracker that starts with the player already ignored never selects
@@ -190,8 +183,8 @@ int runInner()
                      }});
 
     steps.push_back({400, [&] {
-                         check(!trackerStartingIgnored->hasPlayer(), "a player ignored before start() is never selected, even as the only playing player");
-                         check(connectedB == 0, "no playerConnected for the ignored player");
+                         QVERIFY2(!trackerStartingIgnored->hasPlayer(), "a player ignored before start() is never selected, even as the only playing player");
+                         QVERIFY2(connectedB == 0, "no playerConnected for the ignored player");
                      }});
 
     steps.push_back({0, [&] {
@@ -199,8 +192,8 @@ int runInner()
                      }});
 
     steps.push_back({300, [&] {
-                         check(!trackerStartingIgnored->hasPlayer(), "a re-scan never selects the ignored player");
-                         check(connectedB == 0, "the re-scan emits no playerConnected for the ignored player");
+                         QVERIFY2(!trackerStartingIgnored->hasPlayer(), "a re-scan never selects the ignored player");
+                         QVERIFY2(connectedB == 0, "the re-scan emits no playerConnected for the ignored player");
                          delete trackerStartingIgnored;
                          trackerStartingIgnored = nullptr;
                      }});
@@ -223,14 +216,7 @@ int runInner()
     };
     QTimer::singleShot(0, app, runNext);
     app->exec();
-
-    QTextStream out(stdout);
-    out << (g_failures == 0 ? QStringLiteral("PASS") : QStringLiteral("FAIL")) << QStringLiteral(": player ignore list (") << g_failures
-        << QStringLiteral(" failures)") << Qt::endl;
-    return g_failures == 0 ? 0 : 1;
 }
-
-} // namespace
 
 int main(int argc, char **argv)
 {
@@ -238,7 +224,14 @@ int main(int argc, char **argv)
 
     const bool inner = argc > 1 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--inner");
     if (inner) {
-        return runInner();
+        // Drop the --inner marker before QTest parses the arguments: it would
+        // reject it as an unknown option and fail the run.
+        for (int i = 1; i < argc - 1; ++i) {
+            argv[i] = argv[i + 1];
+        }
+        --argc;
+        PlayerTrackerIgnoreTest tc;
+        return QTest::qExec(&tc, argc, argv);
     }
 
     // Not yet on a private bus: re-exec under dbus-run-session so no real player

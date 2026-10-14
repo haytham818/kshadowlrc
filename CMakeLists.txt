@@ -32,6 +32,9 @@ find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS
     Quick
     QuickControls2
     WaylandClient
+    # The test framework. Qt's own, so the harness needs no dependency of its
+    # own; tests/ links Qt6::Test and ECM registers the result with CTest.
+    Test
 )
 # Qt 6.9 moved the private targets into separate CMake packages; on older Qt the
 # Qt6::GuiPrivate target already comes with the Gui component.

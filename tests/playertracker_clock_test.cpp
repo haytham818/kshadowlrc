@@ -18,6 +18,7 @@
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
+#include <QTest>
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantMap>
@@ -35,27 +36,6 @@ namespace
 const char kMprisObjectPath[] = "/org/mpris/MediaPlayer2";
 const char kPlayerInterface[] = "org.mpris.MediaPlayer2.Player";
 const char kPropertiesInterface[] = "org.freedesktop.DBus.Properties";
-
-int g_failures = 0;
-
-void report(bool condition, const QString &what)
-{
-    QTextStream out(stdout);
-    out << (condition ? QStringLiteral("ok:   ") : QStringLiteral("FAIL: ")) << what << Qt::endl;
-    if (!condition) {
-        ++g_failures;
-    }
-}
-
-void check(bool condition, const char *what)
-{
-    report(condition, QString::fromUtf8(what));
-}
-
-void check(bool condition, const QString &what)
-{
-    report(condition, what);
-}
 
 /*!
  * A minimal in-process MPRIS player. Methods/properties are exported by QtDBus's
@@ -150,25 +130,33 @@ private:
     qint64 m_frozenUs = 0;
 };
 
-int runInner()
+} // namespace
+
+class PlayerTrackerClockTest : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void inner();
+};
+
+void PlayerTrackerClockTest::inner()
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.isConnected()) {
         QTextStream(stdout) << "SKIP: session bus unavailable" << Qt::endl;
-        return 0;
+        return;
     }
 
     const QString serviceName = QStringLiteral("org.mpris.MediaPlayer2.kshadowlrc_clock_test");
     if (!bus.registerService(serviceName)) {
-        QTextStream(stdout) << "FAIL: could not register " << serviceName << Qt::endl;
-        return 1;
+        QFAIL(qPrintable(QStringLiteral("could not register %1").arg(serviceName)));
     }
 
     FakePlayer fake;
     if (!bus.registerObject(QString::fromLatin1(kMprisObjectPath), &fake, QDBusConnection::ExportAllContents)) {
-        QTextStream(stdout) << "FAIL: could not export the fake player" << Qt::endl;
         bus.unregisterService(serviceName);
-        return 1;
+        QFAIL("could not export the fake player");
     }
 
     PlayerTracker tracker;
@@ -192,22 +180,22 @@ int runInner()
     std::vector<Step> steps;
 
     steps.push_back({0, [&] {
-                         check(tracker.elapsedMs() == 0, "no player before start(): elapsedMs() == 0");
-                         check(!tracker.hasPlayer(), "no player before start()");
+                         QVERIFY2(tracker.elapsedMs() == 0, "no player before start(): elapsedMs() == 0");
+                         QVERIFY2(!tracker.hasPlayer(), "no player before start()");
                          tracker.start();
                      }});
 
     steps.push_back({300, [&] {
-                         check(tracker.hasPlayer(), "player discovered and connected");
-                         check(tracker.playerName() == serviceName, "active player is the fake");
-                         check(tracker.status() == PlaybackStatus::Playing, "status is Playing");
+                         QVERIFY2(tracker.hasPlayer(), "player discovered and connected");
+                         QVERIFY2(tracker.playerName() == serviceName, "active player is the fake");
+                         QVERIFY2(tracker.status() == PlaybackStatus::Playing, "status is Playing");
                          playingA = tracker.elapsedMs();
                      }});
 
     steps.push_back({600, [&] {
                          playingB = tracker.elapsedMs();
-                         check(playingB > playingA, QStringLiteral("elapsedMs() advances while playing (%1 -> %2)").arg(playingA).arg(playingB));
-                         check(playingB - playingA <= 3000, "played interval is plausible, not a leap");
+                         QVERIFY2(playingB > playingA, qPrintable(QStringLiteral("elapsedMs() advances while playing (%1 -> %2)").arg(playingA).arg(playingB)));
+                         QVERIFY2(playingB - playingA <= 3000, "played interval is plausible, not a leap");
                      }});
 
     steps.push_back({0, [&] {
@@ -215,9 +203,9 @@ int runInner()
                      }});
 
     steps.push_back({250, [&] {
-                         check(tracker.status() == PlaybackStatus::Paused, "status is Paused");
+                         QVERIFY2(tracker.status() == PlaybackStatus::Paused, "status is Paused");
                          paused1 = tracker.elapsedMs();
-                         check(paused1 > 0, QStringLiteral("paused position captured (%1 ms) is non-zero").arg(paused1));
+                         QVERIFY2(paused1 > 0, qPrintable(QStringLiteral("paused position captured (%1 ms) is non-zero").arg(paused1)));
                      }});
 
     // The case that motivated the method: two reads separated by more than one
@@ -225,13 +213,14 @@ int runInner()
     // bit-identical, not merely close.
     steps.push_back({1400, [&] {
                          paused2 = tracker.elapsedMs();
-                         check(paused1 == paused2, QStringLiteral("paused elapsedMs() is bit-identical across a poll (%1 vs %2)").arg(paused1).arg(paused2));
+                         QVERIFY2(paused1 == paused2,
+                                  qPrintable(QStringLiteral("paused elapsedMs() is bit-identical across a poll (%1 vs %2)").arg(paused1).arg(paused2)));
                      }});
 
     steps.push_back({1200, [&] {
                          paused3 = tracker.elapsedMs();
-                         check(paused3 == paused1,
-                               QStringLiteral("paused elapsedMs() still bit-identical after another poll (%1 vs %2)").arg(paused1).arg(paused3));
+                         QVERIFY2(paused3 == paused1,
+                                  qPrintable(QStringLiteral("paused elapsedMs() still bit-identical after another poll (%1 vs %2)").arg(paused1).arg(paused3)));
                      }});
 
     steps.push_back({0, [&] {
@@ -240,8 +229,8 @@ int runInner()
 
     steps.push_back({250, [&] {
                          afterSeek = tracker.elapsedMs();
-                         check(afterSeek == 60000, QStringLiteral("seek while paused sets elapsedMs() exactly (%1 vs 60000)").arg(afterSeek));
-                         check(afterSeek != paused3, "seek while paused actually changed the frozen position");
+                         QVERIFY2(afterSeek == 60000, qPrintable(QStringLiteral("seek while paused sets elapsedMs() exactly (%1 vs 60000)").arg(afterSeek)));
+                         QVERIFY2(afterSeek != paused3, "seek while paused actually changed the frozen position");
                      }});
 
     steps.push_back({0, [&] {
@@ -250,13 +239,15 @@ int runInner()
 
     steps.push_back({200, [&] {
                          resumeA = tracker.elapsedMs();
-                         check(resumeA >= 60000, QStringLiteral("resume starts from the paused position, not behind (%1 >= 60000)").arg(resumeA));
-                         check(resumeA <= 60000 + 1500, QStringLiteral("resume does not jump ahead (%1 <= 61500)").arg(resumeA));
+                         QVERIFY2(resumeA >= 60000,
+                                  qPrintable(QStringLiteral("resume starts from the paused position, not behind (%1 >= 60000)").arg(resumeA)));
+                         QVERIFY2(resumeA <= 60000 + 1500, qPrintable(QStringLiteral("resume does not jump ahead (%1 <= 61500)").arg(resumeA)));
                      }});
 
     steps.push_back({600, [&] {
                          resumeB = tracker.elapsedMs();
-                         check(resumeB > resumeA, QStringLiteral("elapsedMs() advances again after resume (%1 -> %2)").arg(resumeA).arg(resumeB));
+                         QVERIFY2(resumeB > resumeA,
+                                  qPrintable(QStringLiteral("elapsedMs() advances again after resume (%1 -> %2)").arg(resumeA).arg(resumeB)));
                      }});
 
     steps.push_back({0, [&] {
@@ -264,8 +255,8 @@ int runInner()
                      }});
 
     steps.push_back({250, [&] {
-                         check(tracker.status() == PlaybackStatus::Stopped, "status is Stopped");
-                         check(tracker.elapsedMs() == 0, "stopped elapsedMs() is exactly 0");
+                         QVERIFY2(tracker.status() == PlaybackStatus::Stopped, "status is Stopped");
+                         QVERIFY2(tracker.elapsedMs() == 0, "stopped elapsedMs() is exactly 0");
                      }});
 
     steps.push_back({0, [&] {
@@ -273,8 +264,8 @@ int runInner()
                      }});
 
     steps.push_back({400, [&] {
-                         check(!tracker.hasPlayer(), "player disconnect is observed");
-                         check(tracker.elapsedMs() == 0, "no player -> elapsedMs() == 0");
+                         QVERIFY2(!tracker.hasPlayer(), "player disconnect is observed");
+                         QVERIFY2(tracker.elapsedMs() == 0, "no player -> elapsedMs() == 0");
                      }});
 
     QCoreApplication *app = QCoreApplication::instance();
@@ -295,14 +286,7 @@ int runInner()
     };
     QTimer::singleShot(0, app, runNext);
     app->exec();
-
-    QTextStream out(stdout);
-    out << (g_failures == 0 ? QStringLiteral("PASS") : QStringLiteral("FAIL")) << QStringLiteral(": player clock (") << g_failures
-        << QStringLiteral(" failures)") << Qt::endl;
-    return g_failures == 0 ? 0 : 1;
 }
-
-} // namespace
 
 int main(int argc, char **argv)
 {
@@ -310,7 +294,14 @@ int main(int argc, char **argv)
 
     const bool inner = argc > 1 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--inner");
     if (inner) {
-        return runInner();
+        // Drop the --inner marker before QTest parses the arguments: it would
+        // reject it as an unknown option and fail the run.
+        for (int i = 1; i < argc - 1; ++i) {
+            argv[i] = argv[i + 1];
+        }
+        --argc;
+        PlayerTrackerClockTest tc;
+        return QTest::qExec(&tc, argc, argv);
     }
 
     // Not yet on a private bus: re-exec under dbus-run-session so no real player

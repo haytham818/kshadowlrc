@@ -6,19 +6,25 @@
 
 #include "lyrics/providers/lrclib.h"
 
-#include <cstdio>
+#include <QTest>
 
 using namespace kshadowlrc;
 
-static int g_failures = 0;
+// The class has to precede the fixtures: one of them contains an apostrophe
+// ("they're") and moc lexes a lone apostrophe as the start of a character
+// literal, which would swallow the Q_OBJECT macro if it came first.
+class LrclibParseTest : public QObject
+{
+    Q_OBJECT
 
-#define CHECK(cond)                                                                                                                                            \
-    do {                                                                                                                                                       \
-        if (!(cond)) {                                                                                                                                         \
-            ++g_failures;                                                                                                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                                                                               \
-        }                                                                                                                                                      \
-    } while (0)
+private Q_SLOTS:
+    void searchMapping();
+    void getMapping();
+    void instrumental();
+    void plainFallback();
+    void notFound();
+    void malformed();
+};
 
 // Shape of GET /api/search?track_name=Yesterday&artist_name=The%20Beatles
 static const auto kSearchFixture = R"JSON([
@@ -46,90 +52,77 @@ static const auto kNotFoundFixture = R"JSON(
 {"message":"Failed to find specified track","name":"TrackNotFound","statusCode":404}
 )JSON";
 
-static void testSearchMapping()
+void LrclibParseTest::searchMapping()
 {
     bool ok = false;
     const QList<SongInfo> results = LRCLibProvider::parseSearchResponse(QByteArray(kSearchFixture), &ok);
-    CHECK(ok);
-    CHECK(results.size() == 2);
+    QVERIFY(ok);
+    QVERIFY(results.size() == 2);
     if (results.size() == 2) {
-        CHECK(results.at(0).id == QStringLiteral("23920346"));
-        CHECK(results.at(0).title == QStringLiteral("Yesterday"));
-        CHECK(results.at(0).singer == QStringLiteral("The Beatles - The Beatles"));
-        CHECK(results.at(0).album == QStringLiteral("The Beatles - 1962-1966"));
-        CHECK(results.at(0).lengthMs == 125028); // 125.02845 s
-        CHECK(results.at(1).lengthMs == 126000);
+        QVERIFY(results.at(0).id == QStringLiteral("23920346"));
+        QVERIFY(results.at(0).title == QStringLiteral("Yesterday"));
+        QVERIFY(results.at(0).singer == QStringLiteral("The Beatles - The Beatles"));
+        QVERIFY(results.at(0).album == QStringLiteral("The Beatles - 1962-1966"));
+        QVERIFY(results.at(0).lengthMs == 125028); // 125.02845 s
+        QVERIFY(results.at(1).lengthMs == 126000);
     }
 }
 
-static void testGetMapping()
+void LrclibParseTest::getMapping()
 {
     bool ok = false;
     const auto response = LRCLibProvider::parseGetResponse(QByteArray(kGetFixture), &ok);
-    CHECK(ok);
-    CHECK(response.found);
-    CHECK(!response.instrumental);
-    CHECK(response.store.lyric.startsWith(QStringLiteral("[00:05.34] Yesterday")));
-    CHECK(response.store.tlyric.isEmpty());
+    QVERIFY(ok);
+    QVERIFY(response.found);
+    QVERIFY(!response.instrumental);
+    QVERIFY(response.store.lyric.startsWith(QStringLiteral("[00:05.34] Yesterday")));
+    QVERIFY(response.store.tlyric.isEmpty());
 }
 
-static void testInstrumental()
+void LrclibParseTest::instrumental()
 {
     bool ok = false;
     const auto response = LRCLibProvider::parseGetResponse(QByteArray(kInstrumentalFixture), &ok);
-    CHECK(ok);
-    CHECK(response.found); // a real record was returned...
-    CHECK(response.instrumental); // ...marked instrumental...
-    CHECK(!response.store.hasAny()); // ...so it carries no lyric text
+    QVERIFY(ok);
+    QVERIFY(response.found); // a real record was returned...
+    QVERIFY(response.instrumental); // ...marked instrumental...
+    QVERIFY(!response.store.hasAny()); // ...so it carries no lyric text
 }
 
-static void testPlainFallback()
+void LrclibParseTest::plainFallback()
 {
     bool ok = false;
     const auto response = LRCLibProvider::parseGetResponse(QByteArray(kPlainFixture), &ok);
-    CHECK(ok);
-    CHECK(response.found);
-    CHECK(response.store.lyric == QStringLiteral("line one\nline two"));
+    QVERIFY(ok);
+    QVERIFY(response.found);
+    QVERIFY(response.store.lyric == QStringLiteral("line one\nline two"));
 }
 
-static void testNotFound()
+void LrclibParseTest::notFound()
 {
     bool ok = false;
     // 404 body for a get: parsed fine, but nothing was found.
     const auto response = LRCLibProvider::parseGetResponse(QByteArray(kNotFoundFixture), &ok);
-    CHECK(ok);
-    CHECK(!response.found);
+    QVERIFY(ok);
+    QVERIFY(!response.found);
 
     // The same error body handed to the search parser yields an empty list.
     ok = false;
     const QList<SongInfo> results = LRCLibProvider::parseSearchResponse(QByteArray(kNotFoundFixture), &ok);
-    CHECK(ok);
-    CHECK(results.isEmpty());
+    QVERIFY(ok);
+    QVERIFY(results.isEmpty());
 }
 
-static void testMalformed()
+void LrclibParseTest::malformed()
 {
     bool ok = true;
     LRCLibProvider::parseSearchResponse("this is not json", &ok);
-    CHECK(!ok);
+    QVERIFY(!ok);
     ok = true;
     LRCLibProvider::parseGetResponse("{broken", &ok);
-    CHECK(!ok);
+    QVERIFY(!ok);
 }
 
-int main()
-{
-    testSearchMapping();
-    testGetMapping();
-    testInstrumental();
-    testPlainFallback();
-    testNotFound();
-    testMalformed();
+QTEST_GUILESS_MAIN(LrclibParseTest)
 
-    if (g_failures == 0) {
-        std::printf("test_lrclib_parse: all checks passed\n");
-        return 0;
-    }
-    std::fprintf(stderr, "test_lrclib_parse: %d check(s) failed\n", g_failures);
-    return 1;
-}
+#include "lrclib_parse_test.moc"

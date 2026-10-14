@@ -6,23 +6,11 @@
 #include "lyrics/lyriccache.h"
 #include "lyrics/lyricengine.h"
 
-#include <QCoreApplication>
 #include <QFile>
 #include <QStandardPaths>
-
-#include <cstdio>
+#include <QTest>
 
 using namespace kshadowlrc;
-
-static int g_failures = 0;
-
-#define CHECK(cond)                                                                                                                                            \
-    do {                                                                                                                                                       \
-        if (!(cond)) {                                                                                                                                         \
-            ++g_failures;                                                                                                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                                                                               \
-        }                                                                                                                                                      \
-    } while (0)
 
 class FakeProvider : public LyricProvider
 {
@@ -110,18 +98,38 @@ static void clearCache(const TrackMeta &track)
     QFile::remove(LyricCache::cachePath(track));
 }
 
-static void testInvalidTrack()
+class LyricEngineTest : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void initTestCase();
+    void invalidTrack();
+    void foundWithTranslation();
+    void placeholderFiltered();
+    void staleResultIgnored();
+    void noResults();
+    void clearForgetsTheTrack();
+};
+
+void LyricEngineTest::initTestCase()
+{
+    QCoreApplication::setApplicationName(QStringLiteral("kshadowlrc"));
+    QStandardPaths::setTestModeEnabled(true);
+}
+
+void LyricEngineTest::invalidTrack()
 {
     FakeProvider provider(QStringLiteral("fake"));
     LyricEngine engine;
     engine.setProviders({&provider});
     engine.setTrack(TrackMeta{});
 
-    CHECK(engine.state() == LyricEngine::State::NotFound);
-    CHECK(provider.m_searchIds.isEmpty());
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(provider.m_searchIds.isEmpty());
 }
 
-static void testFoundWithTranslation()
+void LyricEngineTest::foundWithTranslation()
 {
     const TrackMeta track = makeTrack(QStringLiteral("Engine Found Song"));
     clearCache(track);
@@ -140,42 +148,42 @@ static void testFoundWithTranslation()
     });
 
     engine.setTrack(track);
-    CHECK(engine.state() == LyricEngine::State::Found);
-    CHECK(stateChanges >= 2); // Loading -> Found
-    CHECK(engine.lineCount() == 2);
-    CHECK(engine.lineText(0) == QStringLiteral("Hello"));
-    CHECK(engine.translationText(0) == QStringLiteral("你好"));
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QVERIFY(stateChanges >= 2); // Loading -> Found
+    QVERIFY(engine.lineCount() == 2);
+    QVERIFY(engine.lineText(0) == QStringLiteral("Hello"));
+    QVERIFY(engine.translationText(0) == QStringLiteral("你好"));
 
     // Before the first line nothing is shown.
-    CHECK(engine.currentIndex() == -1);
-    CHECK(engine.currentText().isEmpty());
+    QVERIFY(engine.currentIndex() == -1);
+    QVERIFY(engine.currentText().isEmpty());
 
     engine.setElapsed(1000);
-    CHECK(engine.currentIndex() == 0);
-    CHECK(engine.currentText() == QStringLiteral("Hello"));
+    QVERIFY(engine.currentIndex() == 0);
+    QVERIFY(engine.currentText() == QStringLiteral("Hello"));
 
     engine.setDisplayMode(LyricDisplayMode::Both);
-    CHECK(engine.currentText() == QStringLiteral("Hello"));
-    CHECK(engine.currentTranslation() == QStringLiteral("你好"));
+    QVERIFY(engine.currentText() == QStringLiteral("Hello"));
+    QVERIFY(engine.currentTranslation() == QStringLiteral("你好"));
 
     engine.setDisplayMode(LyricDisplayMode::Translation);
-    CHECK(engine.currentText() == QStringLiteral("你好"));
+    QVERIFY(engine.currentText() == QStringLiteral("你好"));
 
     engine.setElapsed(2000);
-    CHECK(engine.currentIndex() == 1);
+    QVERIFY(engine.currentIndex() == 1);
     engine.setDisplayMode(LyricDisplayMode::Both);
-    CHECK(engine.currentText() == QStringLiteral("World"));
-    CHECK(engine.currentTranslation() == QStringLiteral("世界"));
+    QVERIFY(engine.currentText() == QStringLiteral("World"));
+    QVERIFY(engine.currentTranslation() == QStringLiteral("世界"));
 
     // Window accessors for a multi-line UI.
-    CHECK(engine.lineWindow(0, 2) == QStringList({QStringLiteral("Hello"), QStringLiteral("World")}));
+    QVERIFY(engine.lineWindow(0, 2) == QStringList({QStringLiteral("Hello"), QStringLiteral("World")}));
 
     // The fresh fetch was cached.
-    CHECK(LyricCache::lookup(track).has_value());
+    QVERIFY(LyricCache::lookup(track).has_value());
     clearCache(track);
 }
 
-static void testPlaceholderFiltered()
+void LyricEngineTest::placeholderFiltered()
 {
     const TrackMeta track = makeTrack(QStringLiteral("Engine Placeholder Song"));
     clearCache(track);
@@ -188,11 +196,11 @@ static void testPlaceholderFiltered()
     engine.setProviders({&provider});
     engine.setTrack(track);
 
-    CHECK(engine.state() == LyricEngine::State::NotFound);
-    CHECK(!LyricCache::lookup(track).has_value()); // nothing cached
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(!LyricCache::lookup(track).has_value()); // nothing cached
 }
 
-static void testStaleResultIgnored()
+void LyricEngineTest::staleResultIgnored()
 {
     const TrackMeta first = makeTrack(QStringLiteral("Engine Stale One"));
     const TrackMeta second = makeTrack(QStringLiteral("Engine Stale Two"));
@@ -208,31 +216,31 @@ static void testStaleResultIgnored()
     engine.setProviders({&provider});
 
     engine.setTrack(first);
-    CHECK(provider.m_searchIds.size() == 1);
+    QVERIFY(provider.m_searchIds.size() == 1);
     const quint64 firstSearchId = provider.m_searchIds.at(0);
 
     engine.setTrack(second);
-    CHECK(provider.m_searchIds.size() == 2);
+    QVERIFY(provider.m_searchIds.size() == 2);
     const quint64 secondSearchId = provider.m_searchIds.at(1);
 
     // The first track's reply lands late and must be ignored.
     provider.deliverSearch(firstSearchId, {makeCandidate(QStringLiteral("1"), first.title)});
-    CHECK(engine.state() == LyricEngine::State::Loading);
+    QVERIFY(engine.state() == LyricEngine::State::Loading);
 
     // The current track's reply drives the pipeline.
     provider.searchResults = {makeCandidate(QStringLiteral("2"), second.title)};
     provider.deliverSearch(secondSearchId, provider.searchResults);
-    CHECK(provider.m_queryIds.size() == 1);
+    QVERIFY(provider.m_queryIds.size() == 1);
 
     provider.deliverLyric(provider.m_queryIds.at(0), QStringLiteral("2"), provider.lyricStore);
-    CHECK(engine.state() == LyricEngine::State::Found);
-    CHECK(engine.lineText(0) == QStringLiteral("stale"));
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QVERIFY(engine.lineText(0) == QStringLiteral("stale"));
 
     clearCache(first);
     clearCache(second);
 }
 
-static void testNoResults()
+void LyricEngineTest::noResults()
 {
     const TrackMeta track = makeTrack(QStringLiteral("Engine Empty Song"));
     clearCache(track);
@@ -243,10 +251,10 @@ static void testNoResults()
     LyricEngine engine;
     engine.setProviders({&provider});
     engine.setTrack(track);
-    CHECK(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
 }
 
-static void testClearForgetsTheTrack()
+void LyricEngineTest::clearForgetsTheTrack()
 {
     const TrackMeta track = makeTrack(QStringLiteral("Engine Clear Song"));
     clearCache(track);
@@ -258,13 +266,13 @@ static void testClearForgetsTheTrack()
     LyricEngine engine;
     engine.setProviders({&provider});
     engine.setTrack(track);
-    CHECK(engine.state() == LyricEngine::State::Found);
-    CHECK(provider.m_searchIds.size() == 1);
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QVERIFY(provider.m_searchIds.size() == 1);
 
     engine.clear();
-    CHECK(engine.state() == LyricEngine::State::Idle);
-    CHECK(engine.currentText().isEmpty());
-    CHECK(!engine.track().isValid()); // the track is forgotten, not just the lyric
+    QVERIFY(engine.state() == LyricEngine::State::Idle);
+    QVERIFY(engine.currentText().isEmpty());
+    QVERIFY(!engine.track().isValid()); // the track is forgotten, not just the lyric
 
     // The same song must load again after a clear. A "processed track" guard left
     // set across clear() would swallow this and leave the overlay blank forever
@@ -272,31 +280,14 @@ static void testClearForgetsTheTrack()
     // sees the search path rather than a cache hit.
     clearCache(track);
     engine.setTrack(track);
-    CHECK(engine.state() == LyricEngine::State::Found);
-    CHECK(provider.m_searchIds.size() == 2);
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QVERIFY(provider.m_searchIds.size() == 2);
     engine.setElapsed(1000);
-    CHECK(engine.currentText() == QStringLiteral("Only line"));
+    QVERIFY(engine.currentText() == QStringLiteral("Only line"));
 
     clearCache(track);
 }
 
-int main(int argc, char **argv)
-{
-    QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName(QStringLiteral("kshadowlrc"));
-    QStandardPaths::setTestModeEnabled(true);
+QTEST_GUILESS_MAIN(LyricEngineTest)
 
-    testInvalidTrack();
-    testFoundWithTranslation();
-    testPlaceholderFiltered();
-    testStaleResultIgnored();
-    testNoResults();
-    testClearForgetsTheTrack();
-
-    if (g_failures == 0) {
-        std::printf("test_lyricengine: all checks passed\n");
-        return 0;
-    }
-    std::fprintf(stderr, "test_lyricengine: %d check(s) failed\n", g_failures);
-    return 1;
-}
+#include "lyricengine_test.moc"

@@ -9,9 +9,7 @@
 
 #include "playermatch.h"
 
-#include <QString>
-#include <QStringList>
-#include <QTextStream>
+#include <QTest>
 
 #include <vector>
 
@@ -20,22 +18,6 @@ using kshadowlrc::isIgnoredPlayer;
 
 namespace
 {
-
-int g_failures = 0;
-
-void report(bool condition, const QString &what)
-{
-    QTextStream out(stdout);
-    out << (condition ? QStringLiteral("ok:   ") : QStringLiteral("FAIL: ")) << what << Qt::endl;
-    if (!condition) {
-        ++g_failures;
-    }
-}
-
-void report(bool condition, const char *what)
-{
-    report(condition, QString::fromUtf8(what));
-}
 
 struct PatternCase {
     const char *pattern;
@@ -46,7 +28,16 @@ struct PatternCase {
 
 } // namespace
 
-int main()
+class PlayerMatchTest : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void ignoredPatternTable();
+    void ignoredPlayerList();
+};
+
+void PlayerMatchTest::ignoredPatternTable()
 {
     // --- One entry at a time: ignoredPatternMatches(). -----------------------
     const std::vector<PatternCase> cases = {
@@ -91,14 +82,17 @@ int main()
 
     for (const PatternCase &c : cases) {
         const bool got = ignoredPatternMatches(QString::fromUtf8(c.pattern), QString::fromUtf8(c.busName));
-        report(got == c.expected,
-               QStringLiteral("pattern '%1' vs '%2' -> %3 (%4)")
-                   .arg(QString::fromUtf8(c.pattern),
-                        QString::fromUtf8(c.busName),
-                        got ? QStringLiteral("match") : QStringLiteral("no match"),
-                        QString::fromUtf8(c.why)));
+        const QString why = QStringLiteral("pattern '%1' vs '%2' -> %3 (%4)")
+                                .arg(QString::fromUtf8(c.pattern),
+                                     QString::fromUtf8(c.busName),
+                                     got ? QStringLiteral("match") : QStringLiteral("no match"),
+                                     QString::fromUtf8(c.why));
+        QVERIFY2(got == c.expected, qPrintable(why));
     }
+}
 
+void PlayerMatchTest::ignoredPlayerList()
+{
     // --- The list: isIgnoredPlayer(). ---------------------------------------
     // The literal out-of-the-box defaults; with the union rule they work as the
     // old startsWith prefixes always did.
@@ -106,20 +100,20 @@ int main()
         QStringLiteral("org.mpris.MediaPlayer2.firefox"),
         QStringLiteral("org.mpris.MediaPlayer2.playerctld"),
     };
-    report(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.firefox.instance1234")), "default list ignores a firefox instance");
-    report(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.firefox")), "default list ignores the bare firefox name");
-    report(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.playerctld")), "default list ignores playerctld");
-    report(!isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "default list leaves chromium alone");
+    QVERIFY2(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.firefox.instance1234")), "default list ignores a firefox instance");
+    QVERIFY2(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.firefox")), "default list ignores the bare firefox name");
+    QVERIFY2(isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.playerctld")), "default list ignores playerctld");
+    QVERIFY2(!isIgnoredPlayer(defaults, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "default list leaves chromium alone");
 
-    report(!isIgnoredPlayer(QStringList{}, QStringLiteral("org.mpris.MediaPlayer2.firefox")), "empty list ignores nothing (firefox)");
-    report(!isIgnoredPlayer(QStringList{}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "empty list ignores nothing (chromium)");
-    report(!isIgnoredPlayer({QStringLiteral("spotify")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "a non-matching entry ignores nothing");
-    report(isIgnoredPlayer({QStringLiteral("spotify"), QStringLiteral("chromium")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")),
-           "a later matching entry is honoured");
-    report(!isIgnoredPlayer({QString(), QString()}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "blank entries are inert");
-
-    QTextStream out(stdout);
-    out << (g_failures == 0 ? QStringLiteral("PASS") : QStringLiteral("FAIL")) << QStringLiteral(": player ignore matching (") << g_failures
-        << QStringLiteral(" failures)") << Qt::endl;
-    return g_failures == 0 ? 0 : 1;
+    QVERIFY2(!isIgnoredPlayer(QStringList{}, QStringLiteral("org.mpris.MediaPlayer2.firefox")), "empty list ignores nothing (firefox)");
+    QVERIFY2(!isIgnoredPlayer(QStringList{}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "empty list ignores nothing (chromium)");
+    QVERIFY2(!isIgnoredPlayer({QStringLiteral("spotify")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")),
+             "a non-matching entry ignores nothing");
+    QVERIFY2(isIgnoredPlayer({QStringLiteral("spotify"), QStringLiteral("chromium")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")),
+             "a later matching entry is honoured");
+    QVERIFY2(!isIgnoredPlayer({QString(), QString()}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "blank entries are inert");
 }
+
+QTEST_GUILESS_MAIN(PlayerMatchTest)
+
+#include "playermatch_test.moc"

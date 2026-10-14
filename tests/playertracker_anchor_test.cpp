@@ -6,106 +6,104 @@
 
 #include "playertracker.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
-#include <QTextStream>
+#include <QTest>
 
 using kshadowlrc::PositionAnchor;
 
-namespace
+class PlayerTrackerAnchorTest : public QObject
 {
+    Q_OBJECT
 
-int g_failures = 0;
+private Q_SLOTS:
+    void invalidAnchorReturnsRawPosition();
+    void freshAnchorStaysAtReportedPosition();
+    void anchorAdvancesWithWallClock();
+    void clampedToTrackLength();
+    void zeroLengthHasNoUpperClamp();
+    void lowerBoundPinnedToZero();
+    void reanchorPinsToReportedPosition();
+};
 
-void check(bool condition, const char *what)
+void PlayerTrackerAnchorTest::invalidAnchorReturnsRawPosition()
 {
-    QTextStream out(stdout);
-    out << (condition ? QStringLiteral("ok:   ") : QStringLiteral("FAIL: ")) << QString::fromUtf8(what) << Qt::endl;
-    if (!condition) {
-        ++g_failures;
-    }
+    // An anchor that was never seen returns its raw position, unclamped.
+    PositionAnchor anchor;
+    anchor.positionMs = 4200;
+    QVERIFY2(!anchor.isValid(), "default anchor is invalid");
+    QVERIFY2(anchor.elapsedMs() == 4200, "invalid at -> returns positionMs");
+    QVERIFY2(anchor.elapsedMs(1000) == 4200, "invalid at ignores the length clamp");
 }
 
-} // namespace
-
-int main(int argc, char **argv)
+void PlayerTrackerAnchorTest::freshAnchorStaysAtReportedPosition()
 {
-    QCoreApplication app(argc, argv);
-    QTextStream out(stdout);
-
-    // An anchor that was never seen returns its raw position, unclamped.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 4200;
-        check(!anchor.isValid(), "default anchor is invalid");
-        check(anchor.elapsedMs() == 4200, "invalid at -> returns positionMs");
-        check(anchor.elapsedMs(1000) == 4200, "invalid at ignores the length clamp");
-    }
-
     // A freshly taken anchor advances by the wall-clock delta.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 1000;
-        anchor.at = QDateTime::currentDateTimeUtc();
+    PositionAnchor anchor;
+    anchor.positionMs = 1000;
+    anchor.at = QDateTime::currentDateTimeUtc();
 
-        const qint64 elapsed = anchor.elapsedMs();
-        check(elapsed >= 1000 && elapsed <= 1100, "fresh anchor stays at the reported position");
-    }
+    const qint64 elapsed = anchor.elapsedMs();
+    QVERIFY2(elapsed >= 1000 && elapsed <= 1100, "fresh anchor stays at the reported position");
+}
 
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 1000;
-        anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-500);
+void PlayerTrackerAnchorTest::anchorAdvancesWithWallClock()
+{
+    PositionAnchor anchor;
+    anchor.positionMs = 1000;
+    anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-500);
 
-        const qint64 elapsed = anchor.elapsedMs();
-        check(elapsed >= 1480 && elapsed <= 1600, "anchor advances with elapsed wall time (~1500 ms)");
-    }
+    const qint64 elapsed = anchor.elapsedMs();
+    QVERIFY2(elapsed >= 1480 && elapsed <= 1600, "anchor advances with elapsed wall time (~1500 ms)");
+}
 
+void PlayerTrackerAnchorTest::clampedToTrackLength()
+{
     // The estimate is clamped to the track length when one is known.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 1000;
-        anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-500);
+    PositionAnchor anchor;
+    anchor.positionMs = 1000;
+    anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-500);
 
-        check(anchor.elapsedMs(1200) == 1200, "clamped to lengthMs at the upper bound");
-        check(anchor.elapsedMs(1000000) >= 1480, "not clamped below the length");
-    }
+    QVERIFY2(anchor.elapsedMs(1200) == 1200, "clamped to lengthMs at the upper bound");
+    QVERIFY2(anchor.elapsedMs(1000000) >= 1480, "not clamped below the length");
+}
 
+void PlayerTrackerAnchorTest::zeroLengthHasNoUpperClamp()
+{
     // Without a known length there is no upper clamp.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 5000;
-        anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-1000);
+    PositionAnchor anchor;
+    anchor.positionMs = 5000;
+    anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-1000);
 
-        const qint64 elapsed = anchor.elapsedMs(0);
-        check(elapsed >= 5980 && elapsed <= 6100, "lengthMs 0 -> no upper clamp");
-    }
+    const qint64 elapsed = anchor.elapsedMs(0);
+    QVERIFY2(elapsed >= 5980 && elapsed <= 6100, "lengthMs 0 -> no upper clamp");
+}
 
+void PlayerTrackerAnchorTest::lowerBoundPinnedToZero()
+{
     // The lower bound is pinned to zero.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = -5000;
-        anchor.at = QDateTime::currentDateTimeUtc();
+    PositionAnchor anchor;
+    anchor.positionMs = -5000;
+    anchor.at = QDateTime::currentDateTimeUtc();
 
-        check(anchor.elapsedMs() == 0, "negative estimate clamped to 0");
-        check(anchor.elapsedMs(10000) == 0, "negative estimate clamped to 0 with a length too");
-    }
+    QVERIFY2(anchor.elapsedMs() == 0, "negative estimate clamped to 0");
+    QVERIFY2(anchor.elapsedMs(10000) == 0, "negative estimate clamped to 0 with a length too");
+}
 
+void PlayerTrackerAnchorTest::reanchorPinsToReportedPosition()
+{
     // Re-anchoring (what the tracker does on every paused poll) keeps the value
     // at the paused position instead of letting it run away.
-    {
-        PositionAnchor anchor;
-        anchor.positionMs = 30000;
-        anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-2500);
-        const qint64 stale = anchor.elapsedMs();
+    PositionAnchor anchor;
+    anchor.positionMs = 30000;
+    anchor.at = QDateTime::currentDateTimeUtc().addMSecs(-2500);
+    const qint64 stale = anchor.elapsedMs();
 
-        anchor.at = QDateTime::currentDateTimeUtc(); // refresh on poll
-        const qint64 refreshed = anchor.elapsedMs();
-        check(stale >= 32480, "un-refreshed anchor drifts forward");
-        check(refreshed >= 30000 && refreshed <= 30050, "refreshing at pins the estimate to the reported position");
-    }
-
-    out << (g_failures == 0 ? QStringLiteral("PASS") : QStringLiteral("FAIL")) << QStringLiteral(": position anchor (") << g_failures
-        << QStringLiteral(" failures)") << Qt::endl;
-    return g_failures == 0 ? 0 : 1;
+    anchor.at = QDateTime::currentDateTimeUtc(); // refresh on poll
+    const qint64 refreshed = anchor.elapsedMs();
+    QVERIFY2(stale >= 32480, "un-refreshed anchor drifts forward");
+    QVERIFY2(refreshed >= 30000 && refreshed <= 30050, "refreshing at pins the estimate to the reported position");
 }
+
+QTEST_GUILESS_MAIN(PlayerTrackerAnchorTest)
+
+#include "playertracker_anchor_test.moc"

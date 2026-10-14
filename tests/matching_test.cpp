@@ -5,19 +5,9 @@
 
 #include "lyrics/matching.h"
 
-#include <cstdio>
+#include <QTest>
 
 using namespace kshadowlrc;
-
-static int g_failures = 0;
-
-#define CHECK(cond)                                                                                                                                            \
-    do {                                                                                                                                                       \
-        if (!(cond)) {                                                                                                                                         \
-            ++g_failures;                                                                                                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                                                                               \
-        }                                                                                                                                                      \
-    } while (0)
 
 static TrackMeta track()
 {
@@ -29,25 +19,37 @@ static TrackMeta track()
     return t;
 }
 
-static void testNormalise()
+class MatchingTest : public QObject
 {
-    CHECK(normalizeForMatch(QStringLiteral("Hello, World! 123")) == QStringLiteral("helloworld123"));
-    CHECK(normalizeForMatch(QStringLiteral("  Страница  ")) == QStringLiteral("страница"));
+    Q_OBJECT
+
+private Q_SLOTS:
+    void normalise();
+    void similarity();
+    void artistOrdering();
+    void durationTolerance();
+    void candidateRanking();
+};
+
+void MatchingTest::normalise()
+{
+    QVERIFY(normalizeForMatch(QStringLiteral("Hello, World! 123")) == QStringLiteral("helloworld123"));
+    QVERIFY(normalizeForMatch(QStringLiteral("  Страница  ")) == QStringLiteral("страница"));
 }
 
-static void testSimilarity()
+void MatchingTest::similarity()
 {
     const double identical = bigramSimilarity(normalizeForMatch(QStringLiteral("你好，世界")), normalizeForMatch(QStringLiteral("你好，世界")));
-    CHECK(identical == 1.0);
+    QVERIFY(identical == 1.0);
 
     const double close = bigramSimilarity(normalizeForMatch(QStringLiteral("你好世界")), normalizeForMatch(QStringLiteral("你好，世界")));
-    CHECK(close > 0.7);
+    QVERIFY(close > 0.7);
 
     const double far = bigramSimilarity(normalizeForMatch(QStringLiteral("你好世界")), normalizeForMatch(QStringLiteral("我的世界")));
-    CHECK(close > far);
+    QVERIFY(close > far);
 }
 
-static void testArtistOrdering()
+void MatchingTest::artistOrdering()
 {
     const TrackMeta t = track();
 
@@ -74,14 +76,14 @@ static void testArtistOrdering()
     const SongMatch mMissing = matchLikelyLyric(t, missingArtist);
 
     // A correct artist must score strictly better than a wrong or missing one.
-    CHECK(mCorrect.score > mWrong.score);
-    CHECK(mCorrect.score > mMissing.score);
-    CHECK(mCorrect.rank == 0);
-    CHECK(mCorrect.rank <= mWrong.rank);
-    CHECK(mCorrect.rank <= mMissing.rank);
+    QVERIFY(mCorrect.score > mWrong.score);
+    QVERIFY(mCorrect.score > mMissing.score);
+    QVERIFY(mCorrect.rank == 0);
+    QVERIFY(mCorrect.rank <= mWrong.rank);
+    QVERIFY(mCorrect.rank <= mMissing.rank);
 }
 
-static void testDurationTolerance()
+void MatchingTest::durationTolerance()
 {
     const TrackMeta t = track(); // 125000 ms
 
@@ -93,22 +95,22 @@ static void testDurationTolerance()
     beyond.title = QStringLiteral("Completely Different Words");
     beyond.lengthMs = 125000 + kDurationToleranceMs + 1; // one ms over
 
-    CHECK(withinDurationTolerance(t, within));
-    CHECK(!withinDurationTolerance(t, beyond));
+    QVERIFY(withinDurationTolerance(t, within));
+    QVERIFY(!withinDurationTolerance(t, beyond));
 
     // Weak title similarity, so the rank is decided by the duration fast path.
-    CHECK(matchLikelyLyric(t, within).rank == 1);
-    CHECK(matchLikelyLyric(t, beyond).rank == 2);
+    QVERIFY(matchLikelyLyric(t, within).rank == 1);
+    QVERIFY(matchLikelyLyric(t, beyond).rank == 2);
 
     // An unknown length never counts as a duration match.
     SongInfo unknownLength;
     unknownLength.title = QStringLiteral("Completely Different Words");
     unknownLength.lengthMs = 0;
-    CHECK(!withinDurationTolerance(t, unknownLength));
-    CHECK(matchLikelyLyric(t, unknownLength).rank == 2);
+    QVERIFY(!withinDurationTolerance(t, unknownLength));
+    QVERIFY(matchLikelyLyric(t, unknownLength).rank == 2);
 }
 
-static void testRankCandidates()
+void MatchingTest::candidateRanking()
 {
     const TrackMeta t = track();
 
@@ -126,24 +128,12 @@ static void testRankCandidates()
 
     QList<SongInfo> candidates{weak, best};
     const QList<RankedSong> ranked = rankCandidates(t, candidates, 0);
-    CHECK(ranked.size() == 2);
-    CHECK(ranked.at(0).song.id == QStringLiteral("1"));
-    CHECK(ranked.at(0).match.rank == 0);
-    CHECK(ranked.at(1).song.id == QStringLiteral("2"));
+    QVERIFY(ranked.size() == 2);
+    QVERIFY(ranked.at(0).song.id == QStringLiteral("1"));
+    QVERIFY(ranked.at(0).match.rank == 0);
+    QVERIFY(ranked.at(1).song.id == QStringLiteral("2"));
 }
 
-int main()
-{
-    testNormalise();
-    testSimilarity();
-    testArtistOrdering();
-    testDurationTolerance();
-    testRankCandidates();
+QTEST_GUILESS_MAIN(MatchingTest)
 
-    if (g_failures == 0) {
-        std::printf("test_matching: all checks passed\n");
-        return 0;
-    }
-    std::fprintf(stderr, "test_matching: %d check(s) failed\n", g_failures);
-    return 1;
-}
+#include "matching_test.moc"
