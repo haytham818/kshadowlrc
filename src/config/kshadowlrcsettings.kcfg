@@ -84,6 +84,10 @@
     <entry name="lyricOffsetMs" type="Int">
       <label>Lyric time offset in milliseconds, positive shifts lyrics earlier</label>
       <default>0</default>
+      <!-- The range both the settings window and the global shortcuts are
+           clamped to; ControlService::MaxOffsetMs is the same number. -->
+      <min>-10000</min>
+      <max>10000</max>
     </entry>
 
     <entry name="syncIntervalMs" type="Int">
