@@ -34,6 +34,10 @@ int main(int argc, char *argv[])
     // development and for exercising the overlay with no player around.
     const QCommandLineOption demoOption(QStringLiteral("demo"), i18n("Play the built-in demo lyric instead of following the desktop's media players."));
     parser.addOption(demoOption);
+    // Open the settings window at startup. It is also reachable from the tray
+    // icon; this is the way in when the tray has no host to show the icon.
+    const QCommandLineOption settingsOption(QStringLiteral("settings"), i18n("Open the settings window on startup."));
+    parser.addOption(settingsOption);
     aboutData.setupCommandLine(&parser);
 
     // Pass 1, before QApplication: its constructor aborts without a display, yet
@@ -64,5 +68,5 @@ int main(int argc, char *argv[])
     parser.process(app);
     aboutData.processCommandLine(&parser); // applies --desktopfile
 
-    return app.run(aboutData, parser.value(outputOption), parser.isSet(demoOption));
+    return app.run(aboutData, parser.value(outputOption), parser.isSet(demoOption), parser.isSet(settingsOption));
 }

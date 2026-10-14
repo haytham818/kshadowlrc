@@ -8,8 +8,10 @@
 #include "lyrics/controller.h"
 #include "platform/overlaywindow.h"
 #include "player/playertracker.h"
+#include "system/controlservice.h"
 
 #include <KAboutData>
+#include <KLocalizedQmlContext>
 #include <KLocalizedString>
 
 #if HAVE_KDBUSADDONS
@@ -18,9 +20,11 @@
 
 #include <QIcon>
 #include <QLoggingCategory>
+#include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickView>
+#include <QQuickWindow>
 
 Q_LOGGING_CATEGORY(lcApp, "kshadowlrc.app")
 
@@ -29,10 +33,25 @@ Q_LOGGING_CATEGORY(lcApp, "kshadowlrc.app")
 static void initResources()
 {
     Q_INIT_RESOURCE(qml);
+    Q_INIT_RESOURCE(icons);
 }
 
 namespace kshadowlrc
 {
+
+/*!
+ * Give \p engine's QML the i18n() family.
+ *
+ * Importing org.kde.kirigami does not define i18n(): it is a method of the
+ * translator that has to be installed as the engine's root context object. The
+ * translation domain is the one main.cpp sets with
+ * KLocalizedString::setApplicationDomain, read back rather than repeated here.
+ */
+static void installLocalization(QQmlEngine *engine)
+{
+    KLocalizedQmlContext *context = KLocalization::setupLocalizedContext(engine);
+    context->setTranslationDomain(QString::fromUtf8(KLocalizedString::applicationDomain()));
+}
 
 Application::Application(int &argc, char **argv)
     : QApplication(argc, argv)
@@ -119,7 +138,63 @@ void Application::applyPlaybackSettings()
                   << "lrclib=" << m_settings->lrclibEnabled();
 }
 
-int Application::run(const KAboutData &aboutData, const QString &outputName, bool demo)
+void Application::createControlService()
+{
+    // The tray icon and the global shortcuts need the lyric controller's offset;
+    // everything else they ask for belongs to the application, so they come back
+    // as signals rather than as pointers to the overlay or the window policy.
+    m_controlService = std::make_unique<ControlService>(m_lyricsController.get());
+
+    connect(m_controlService.get(), &ControlService::settingsRequested, this, &Application::openSettingsWindow);
+    connect(m_controlService.get(), &ControlService::overlayVisibilityToggleRequested, this, [this] {
+        const bool visible = !m_overlay->isVisible();
+        m_overlay->setVisible(visible);
+        m_controlService->setOverlayVisible(visible);
+        qCInfo(lcApp) << "overlay" << (visible ? "shown" : "hidden");
+    });
+    connect(m_controlService.get(), &ControlService::quitRequested, this, [] {
+        qCInfo(lcApp) << "quit requested from the tray";
+        QCoreApplication::quit();
+    });
+
+    m_controlService->setOverlayVisible(m_overlay->isVisible());
+}
+
+void Application::openSettingsWindow()
+{
+    if (!m_settingsEngine) {
+        m_settingsEngine = std::make_unique<QQmlApplicationEngine>();
+        installLocalization(m_settingsEngine.get());
+        // Set before load() so the window's bindings are live from the first
+        // evaluation; the settings object is shared with the overlay, so a change
+        // made in either place reaches the other at once.
+        m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("settings"), m_settings);
+        connect(m_settingsEngine.get(), &QQmlApplicationEngine::warnings, this, [](const QList<QQmlError> &warnings) {
+            for (const QQmlError &warning : warnings) {
+                qCWarning(lcApp) << "Settings window QML:" << warning.toString();
+            }
+        });
+
+        m_settingsEngine->load(QUrl(QStringLiteral("qrc:/qml/settings.qml")));
+
+        if (m_settingsEngine->rootObjects().isEmpty()) {
+            qCCritical(lcApp) << "the settings window could not be loaded";
+            m_settingsEngine.reset();
+            return;
+        }
+        qCInfo(lcApp) << "settings window loaded";
+    }
+
+    auto *window = qobject_cast<QQuickWindow *>(m_settingsEngine->rootObjects().constFirst());
+    if (window) {
+        window->show();
+        window->raise();
+        window->requestActivate();
+        qCInfo(lcApp) << "settings window shown";
+    }
+}
+
+int Application::run(const KAboutData &aboutData, const QString &outputName, bool demo, bool openSettings)
 {
     // Qt Quick Controls must use the Plasma style so Kirigami theming (fonts,
     // units) resolves. Only set a default: an explicit QT_QUICK_CONTROLS_STYLE
@@ -173,6 +248,7 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
     // Expose the native objects to QML. Set before setSource() so the root
     // object can bind to and call them from Component.onCompleted. The settings
     // object is handed over whole so QML bindings stay live rather than copied.
+    installLocalization(m_overlay->engine());
     QQmlContext *context = m_overlay->rootContext();
     context->setContextProperty(QStringLiteral("overlayWindow"), m_overlay.get());
     context->setContextProperty(QStringLiteral("lyricsController"), m_lyricsController.get());
@@ -187,10 +263,18 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
     }
 
     // Mapping the surface created its platform window, so the shell integration
-    // has already been chosen. Unset the variable so child processes (a future
-    // "launch app" action) do not inherit it.
+    // has already been chosen. Unset the variable so the settings window and any
+    // child process (a future "launch app" action) are ordinary toplevels rather
+    // than further layer surfaces.
     m_overlay->show();
     qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
+
+    // After the unset, so the tray icon's menu and the settings window are
+    // ordinary windows.
+    createControlService();
+    if (openSettings) {
+        openSettingsWindow();
+    }
 
     // The demo runs only when asked for; otherwise the overlay waits for a real
     // player. The tracker connects asynchronously, and a player connecting
