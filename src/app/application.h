@@ -39,13 +39,13 @@ public:
     static KAboutData makeAboutData();
 
     /*!
-     * Sets up metadata, the single-instance guard, the layer-shell platform
-     * integration and the overlay, then runs the event loop. Returns the exit
-     * code. When \p demo is set the built-in demo lyric runs instead of the
-     * desktop's media players. \p outputName is the \c --output value and wins
-     * over the settings file when non-empty. When \p openSettings is set the
-     * settings window is opened as soon as the overlay is up; it is otherwise
-     * reachable from the tray icon.
+     * Sets up metadata, the single-instance guard, the overlay and the lyrics
+     * pipeline behind it, then runs the event loop. Returns the exit code. When
+     * \p demo is set the built-in demo lyric runs instead of the desktop's media
+     * players. \p outputName is the \c --output value: it decides the initial
+     * output when non-empty, and the settings window can move the overlay from
+     * there on. When \p openSettings is set the settings window is opened as soon
+     * as the overlay is up; it is otherwise reachable from the tray icon.
      */
     int run(const KAboutData &aboutData, const QString &outputName = QString(), bool demo = false, bool openSettings = false);
 
@@ -66,7 +66,11 @@ private:
     /*! The settings window's QML engine; created the first time it is opened. */
     std::unique_ptr<QQmlApplicationEngine> m_settingsEngine;
     KShadowLrcSettings *m_settings = nullptr;
-    /*! True when --output was given: the command line then beats the file. */
+    /*!
+     * True when --output was given: it then decides the initial output instead of
+     * the settings file. Later changes come from the settings window, which is
+     * authoritative while the application runs.
+     */
     bool m_outputNameFromCommandLine = false;
 };
 

@@ -46,9 +46,9 @@ OverlayWindow::OverlayWindow(QWindow *parent)
     // layer-shell configure sequence then carries it, so no manual commit yet.
     applyInputRegion();
 
-    // The output has to be chosen before the surface exists, so this runs here and
-    // not from show(). Later screen changes only re-resolve and warn: see
-    // OverlayWindow::setOutputName().
+    // Resolve the configured output now: the layer surface binds its output when
+    // it is first created, so the screen has to be right before the first show().
+    // A later change rebuilds the surface; see resolveOutput().
     // QGuiApplication::instance() is typed as QCoreApplication*, so cast to reach
     // the screen signals.
     if (auto *guiApp = qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
@@ -118,21 +118,49 @@ void OverlayWindow::resolveOutput()
         return;
     }
 
-    if (isVisible()) {
-        // LayerShellQt binds the layer surface to the output when that surface is
-        // created, which is what show() does. Re-pointing a mapped one would mean
-        // recreating it, so be honest about what this does and does not do.
-        qCWarning(lcOverlay) << "output changed to" << m_screen->name() << "after the overlay was mapped; it will move on the next start";
-    }
-
+    // Point both the layer surface and the QWindow at the chosen screen. The
+    // QWindow's screen decides the device pixel ratio and which screen the QML
+    // scene is composed for; LayerShellQt reads its own copy when it creates the
+    // layer surface.
     m_layerWindow->setScreen(m_screen);
-    // Keep the QWindow in step too: that is what decides the device pixel ratio
-    // and which screen the QML scene is composed for.
     QWindow::setScreen(m_screen);
 
-    qCDebug(lcOverlay) << "output requested" << (m_outputName.isEmpty() ? QStringLiteral("<primary>") : m_outputName) << "resolved to" << m_screen->name()
-                       << m_screen->geometry();
+    if (isVisible()) {
+        // Neither setScreen() moves a mapped Wayland window: the layer surface
+        // fixes its output when it is created and the protocol has no request to
+        // change it, so rebuilding the surface is the only way to honour the new
+        // output. isVisible() implies a platform window exists, so this cannot
+        // fire before the first map; a hidden overlay simply picks the new screen
+        // up when it is next shown.
+        rebuildSurface();
+    }
+
+    qCDebug(lcOverlay) << "active output" << m_screen->name() << m_screen->geometry();
     Q_EMIT activeOutputChanged(m_screen->name());
+}
+
+void OverlayWindow::rebuildSurface()
+{
+    // destroy() drops the platform window and its wl_surface; the following show()
+    // creates a fresh one. LayerShellQt::Window survives - it is a child of this
+    // QWindow - and re-installs the layer-shell integration on the new surface, so
+    // the rebuilt one is a layer surface just like the original.
+    //
+    // QWaylandLayerSurface's constructor re-reads all of the layer state from that
+    // surviving Window: the layer, the namespace (scope), the anchors, the
+    // margins, the exclusive zone and edge, the keyboard interactivity, the
+    // desired size, and the output screen set by the caller above. None of it has
+    // to be re-asserted here.
+    //
+    // The input region is not layer state - it lives on the wl_surface that just
+    // went away - so force the mask onto the new platform window rather than
+    // trusting it to be re-applied; that is what keeps the surface click-through
+    // across a rebuild.
+    destroy();
+    applyInputRegion(true);
+    show();
+
+    qCDebug(lcOverlay) << "rebuilt the layer surface on" << m_screen->name();
 }
 
 void OverlayWindow::applyLayerShell()
@@ -237,7 +265,7 @@ void OverlayWindow::applyAnchors()
     m_layerWindow->setMargins(margins);
 }
 
-void OverlayWindow::applyInputRegion()
+void OverlayWindow::applyInputRegion(bool force)
 {
     // TRAP: an empty QRegion() clears the mask, which makes the surface accept
     // ALL input — the opposite of click-through. So "no input" is expressed as a
@@ -245,7 +273,7 @@ void OverlayWindow::applyInputRegion()
     // is exactly the cleared (empty) mask.
     const QRegion region = m_clickThrough ? QRegion(0, 0, 1, 1) : QRegion();
 
-    if (region == m_inputRegion) {
+    if (!force && region == m_inputRegion) {
         return;
     }
 

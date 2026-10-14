@@ -61,9 +61,9 @@ metainfo and the icon.
 ./build/bin/kshadowlrc
 ```
 
-- `--output NAME` places the overlay on that Wayland output (`HDMI-A-1`, …)
-  instead of the configured one. An unknown name falls back to the primary
-  output.
+- `--output NAME` places the overlay on that Wayland output (`HDMI-A-1`, …) at
+  startup instead of the configured one. An unknown name falls back to the
+  primary output. The settings window can move it while the app runs.
 - `--demo` plays a built-in lyric instead of following the desktop, for when
   nothing is playing.
 - `--settings` opens the settings window at startup. It is also in the tray

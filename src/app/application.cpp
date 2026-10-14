@@ -94,8 +94,10 @@ void Application::applyOverlaySettings(const QString &commandLineOutput)
     m_overlay->setMargin(m_settings->margin());
     m_overlay->setClickThrough(m_settings->clickThrough());
 
-    // Command line beats the file: a --output given here wins now, and keeps
-    // winning if the file value is changed later.
+    // The current value decides the initial output; the settings window's picker
+    // is authoritative afterwards, so a change there moves the overlay even when
+    // --output was passed. (A second --output from the same process is not a
+    // thing.)
     m_outputNameFromCommandLine = !commandLineOutput.isEmpty();
     m_overlay->setOutputName(m_outputNameFromCommandLine ? commandLineOutput : m_settings->outputName());
 
@@ -112,10 +114,6 @@ void Application::applyOverlaySettings(const QString &commandLineOutput)
         qCInfo(lcApp) << "settings changed: clickThrough ->" << m_settings->clickThrough();
     });
     connect(m_settings, &KShadowLrcSettings::outputNameChanged, this, [this] {
-        if (m_outputNameFromCommandLine) {
-            qCInfo(lcApp) << "--output overrides outputName; ignoring file change to" << m_settings->outputName();
-            return;
-        }
         m_overlay->setOutputName(m_settings->outputName());
         qCInfo(lcApp) << "settings changed: outputName ->" << m_settings->outputName();
     });
@@ -221,11 +219,6 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
 
     initResources();
 
-    // Opt into the layer-shell platform plugin. Equivalent to the deprecated
-    // LayerShellQt::Shell::useLayerShell(); it only sets this variable and must
-    // happen before the first QWindow is created.
-    qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
-
     // Settings are read once here and owned by the application. The factory
     // wires every changed signal to save(), so a later assignment persists.
     m_settings = createSettings(this);
@@ -239,9 +232,10 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
     m_lyricsController->setPlayerTracker(m_playerTracker.get());
     applyPlaybackSettings();
 
-    // The overlay is constructed and configured before it is shown: the layer
-    // surface binds to its output, edge and margin when its platform window is
-    // created, so apply everything first.
+    // The overlay's layer-shell identity comes from LayerShellQt::Window::get()
+    // inside its constructor (on the platform surface being created), so that has
+    // to run before this QWindow is first mapped. Everything the surface binds -
+    // the output, anchors and margins - is applied before show() below too.
     m_overlay = std::make_unique<OverlayWindow>();
     applyOverlaySettings(outputName);
 
@@ -262,15 +256,10 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
         }
     }
 
-    // Mapping the surface created its platform window, so the shell integration
-    // has already been chosen. Unset the variable so the settings window and any
-    // child process (a future "launch app" action) are ordinary toplevels rather
-    // than further layer surfaces.
     m_overlay->show();
-    qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
 
-    // After the unset, so the tray icon's menu and the settings window are
-    // ordinary windows.
+    // The settings window and the tray icon are ordinary toplevels: they are never
+    // passed through LayerShellQt, so only the overlay above is a layer surface.
     createControlService();
     if (openSettings) {
         openSettingsWindow();

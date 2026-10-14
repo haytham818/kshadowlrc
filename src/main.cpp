@@ -22,12 +22,12 @@ int main(int argc, char *argv[])
 
     QCommandLineParser parser;
     const QCommandLineOption versionOption = parser.addVersionOption();
-    // Which output the overlay attaches to. Overrides the settings file's
-    // outputName; absent/empty means the settings value, itself empty by
-    // default (the primary output). An unknown name falls back to the primary.
+    // Which output the overlay attaches to at startup, instead of the settings
+    // file's outputName. Absent means the settings value, itself empty by default
+    // (the primary output). An unknown name falls back to the primary. It is only
+    // the startup choice: the settings window moves the overlay while it runs.
     const QCommandLineOption outputOption(QStringLiteral("output"),
-                                          i18n("Output to place the overlay on, e.g. HDMI-A-1. Overrides the configured output; "
-                                               "empty means the primary output."),
+                                          i18n("Output to place the overlay on at startup, e.g. HDMI-A-1, overriding the configured output."),
                                           QStringLiteral("name"));
     parser.addOption(outputOption);
     // Run the built-in demo lyric instead of following media players. For

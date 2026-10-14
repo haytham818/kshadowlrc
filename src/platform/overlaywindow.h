@@ -77,10 +77,10 @@ public:
      * (e.g. "HDMI-A-1"). Empty means "the primary output". An unknown name also
      * falls back to the primary output; see resolveOutputIndex().
      *
-     * The choice is applied when the surface is created, so a change made after
-     * the overlay is on screen does not move it — it is picked up on the next
-     * start. Re-targeting a live surface would mean recreating the layer surface,
-     * which is not implemented.
+     * A mapped layer surface cannot be re-targeted: the protocol has no request
+     * for it and the output is fixed when the surface is created. So a change
+     * made while the overlay is on screen recreates the layer surface on the new
+     * output, and one made while it is hidden takes effect on the next map.
      */
     void setOutputName(const QString &name);
     QString outputName() const
@@ -89,8 +89,8 @@ public:
     }
 
     /*!
-     * The output actually in use, or an empty string while the overlay has not
-     * been mapped yet. Differs from outputName() when that one fell back.
+     * The output actually in use: the resolved screen, or an empty string while
+     * no output is available. Differs from outputName() when that one fell back.
      */
     QString activeOutputName() const;
 
@@ -101,11 +101,22 @@ Q_SIGNALS:
 private:
     void applyLayerShell();
     void applyAnchors();
-    void applyInputRegion();
+    /*!
+     * Publish the input region (the click-through mask). A \p force re-sends the
+     * mask even when it is unchanged, which a rebuilt surface needs: the region
+     * lives on the wl_surface that went away with the old platform window.
+     */
+    void applyInputRegion(bool force = false);
     /*! Commit the raw wl_surface so a changed input region takes effect now. */
     void commitSurface();
     /*! Resolve the configured output against the live screen list and apply it. */
     void resolveOutput();
+    /*!
+     * Recreate the platform window (and its layer surface) so it binds to the
+     * current screen and re-reads the whole layer-shell state. Only valid while
+     * the overlay is mapped; the mapped state is restored.
+     */
+    void rebuildSurface();
 
     LayerShellQt::Window *m_layerWindow = nullptr;
     Edge m_edge = Edge::Bottom;
