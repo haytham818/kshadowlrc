@@ -23,8 +23,13 @@ ctest --test-dir build -V
 - When several agents work in parallel, **each uses its own build directory**
   (`build-<lane>`) so nobody clobbers anybody's configure step.
 - Every `tests/*.cpp` becomes its own CTest target automatically — drop the file
-  in, nothing else to wire. Tests must be **deterministic and offline**: never
-  touch the network. To test parsing, call the same parser with a saved fixture.
+  in, nothing else to wire. One file is one **Qt Test** class: `private Q_SLOTS`
+  for the test functions, `QVERIFY`/`QCOMPARE` for the checks, never a home-made
+  macro. `tests/lrcparser_test.cpp` is the plain model; the MPRIS and settings
+  tests show how to keep a hand-written `main` when the environment has to be in
+  place before the application object exists.
+- Tests must be **deterministic and offline**: never touch the network. To test
+  parsing, call the same parser with a saved fixture.
 - If a build error comes from a path outside your assignment, a sibling lane is
   mid-write. Wait and rebuild; do not "fix" their file, and do not loop on it.
 
