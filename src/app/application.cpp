@@ -6,6 +6,7 @@
 #include "config/settings.h"
 #include "kshadowlrc.h"
 #include "lyrics/controller.h"
+#include "platform/outputs.h"
 #include "platform/overlaywindow.h"
 #include "player/playertracker.h"
 #include "system/controlservice.h"
@@ -167,6 +168,10 @@ void Application::openSettingsWindow()
         // evaluation; the settings object is shared with the overlay, so a change
         // made in either place reaches the other at once.
         m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("settings"), m_settings);
+        // The output picker can only show what is connected, so it reads the live
+        // output list. Parented to the application, so it outlives the engine.
+        m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("outputs"), new Outputs(this));
+
         connect(m_settingsEngine.get(), &QQmlApplicationEngine::warnings, this, [](const QList<QQmlError> &warnings) {
             for (const QQmlError &warning : warnings) {
                 qCWarning(lcApp) << "Settings window QML:" << warning.toString();

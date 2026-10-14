@@ -29,6 +29,12 @@ import org.kde.kirigami as Kirigami
  * KShadowLrcSettings.EnumEdge.Top. Their models are ordered to match the kcfg
  * <choices> blocks and must be kept in step with them.
  *
+ * The output picker is the one control with no plain file-backed value to edit:
+ * it lists the connected outputs from the `outputs` context property (a
+ * kshadowlrc::Outputs) and writes the chosen name into settings.outputName on
+ * activation only. Committing from a currentIndex change instead would rewrite
+ * the config file every time a hotplug rebuilds the model.
+ *
  * i18n() is callable here because the host installs a translator
  * (KLocalization::setupLocalizedContext, or a KLocalizedContext) as the engine's
  * root context object; importing org.kde.kirigami on its own does not define it.
@@ -57,6 +63,32 @@ Kirigami.ApplicationWindow {
 
     function colorToHex(color) {
         return "#" + root.hexByte(color.r) + root.hexByte(color.g) + root.hexByte(color.b)
+    }
+
+    // The picker's entries: "follow the primary output" first, naming the output
+    // that is primary right now, then one entry per connected output. A name
+    // that is configured but not connected stays in the list, so the row keeps
+    // showing what the file actually says.
+    function outputModel() {
+        const names = outputs.names
+        const primary = outputs.primaryName
+        const entries = [{
+            value: "",
+            label: primary.length > 0 ? i18n("Primary output (%1)", primary) : i18n("Primary output")
+        }]
+        for (let i = 0; i < names.length; ++i) {
+            entries.push({ value: names[i], label: names[i] })
+        }
+        if (root.configuredOutputMissing()) {
+            entries.push({ value: settings.outputName, label: i18n("%1 (not connected)", settings.outputName) })
+        }
+        return entries
+    }
+
+    // True when the configured output is a name no connected screen has: the
+    // overlay then falls back to the primary output, and the row says so.
+    function configuredOutputMissing() {
+        return settings.outputName.length > 0 && outputs.names.indexOf(settings.outputName) === -1
     }
 
     // The ignored-players list is a StringList property: read it, edit the copy,
@@ -216,12 +248,63 @@ Kirigami.ApplicationWindow {
                 onToggled: settings.clickThrough = checked
             }
 
-            QQC2.TextField {
-                id: outputNameField
+            ColumnLayout {
                 Kirigami.FormData.label: i18n("Output:")
-                placeholderText: i18n("Primary output")
-                text: settings.outputName
-                onEditingFinished: settings.outputName = text
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 15
+                spacing: Math.round(Kirigami.Units.smallSpacing / 2)
+
+                QQC2.ComboBox {
+                    id: outputField
+                    Layout.fillWidth: true
+                    // Rebuilt whenever a screen comes or goes: outputModel()
+                    // reads outputs.names and outputs.primaryName, both of which
+                    // notify through outputs.changed.
+                    model: root.outputModel()
+                    // The entries are { value, label }: the value is what goes
+                    // into settings.outputName, "" meaning "follow the primary".
+                    valueRole: "value"
+                    textRole: "label"
+
+                    // currentIndex is deliberately not a binding: picking an
+                    // entry makes the control assign it itself, which drops the
+                    // binding, and after that a hotplug has to re-resolve the row
+                    // from the setting rather than leave the index sitting on
+                    // whichever entry happened to move into that slot.
+                    function selectConfiguredOutput() {
+                        currentIndex = indexOfValue(settings.outputName)
+                    }
+
+                    Component.onCompleted: outputField.selectConfiguredOutput()
+
+                    // A pick is the only thing that writes the setting: committing
+                    // from a currentIndex change would rewrite the config file
+                    // every time a hotplug rebuilds the model.
+                    onActivated: settings.outputName = currentValue
+
+                    Connections {
+                        target: settings
+                        function onOutputNameChanged() {
+                            outputField.selectConfiguredOutput()
+                        }
+                    }
+
+                    Connections {
+                        target: outputs
+                        function onChanged() {
+                            outputField.selectConfiguredOutput()
+                        }
+                    }
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    // Only while the configured name really is unconnected.
+                    visible: root.configuredOutputMissing()
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: i18n("That output is not connected; the overlay is shown on the primary output.")
+                }
             }
 
             // ---- Playback ---------------------------------------------------
