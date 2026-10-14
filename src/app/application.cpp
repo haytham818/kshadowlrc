@@ -57,10 +57,8 @@ KAboutData Application::makeAboutData()
     // component name is already a reverse-DNS id, so setting one here would yield
     // the doubled "haytham818.github.io.io.github.haytham818.kshadowlrc". Leaving
     // it empty makes the bus name exactly the application id.
-    // No homepage and no bug address: the project has no published URL yet, and
-    // a made-up one would send people to a page that is not ours. Passed
-    // explicitly so the KDE-wide default bug address is not inherited either.
-    aboutData.setBugAddress(QByteArray());
+    aboutData.setHomepage(QStringLiteral("https://github.com/haytham818/kshadowlrc"));
+    aboutData.setBugAddress(QByteArrayLiteral("https://github.com/haytham818/kshadowlrc/issues"));
     aboutData.setDesktopFileName(QStringLiteral(KSHADOWLRC_APP_ID));
     return aboutData;
 }

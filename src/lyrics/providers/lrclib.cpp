@@ -24,7 +24,7 @@ constexpr auto kBaseUrl = "https://lrclib.net";
 constexpr int kRequestTimeoutMs = 8000;
 
 const QString kUserAgent = [] {
-    return QStringLiteral("KShadowLrc/" KSHADOWLRC_VERSION_STRING " (" KSHADOWLRC_APP_ID ")");
+    return QStringLiteral("KShadowLrc/" KSHADOWLRC_VERSION_STRING " (+https://github.com/haytham818/kshadowlrc)");
 }();
 
 qint64 secondsToMs(const QJsonValue &value)

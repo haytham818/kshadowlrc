@@ -5,6 +5,9 @@
   <project_license>GPL-3.0-or-later</project_license>
   <name>KShadowLrc</name>
   <summary>Floating desktop lyrics overlay for KDE Plasma 6 on Wayland</summary>
+  <url type="homepage">https://github.com/haytham818/kshadowlrc</url>
+  <url type="bugtracker">https://github.com/haytham818/kshadowlrc/issues</url>
+  <url type="vcs-browser">https://github.com/haytham818/kshadowlrc</url>
   <description>
     <p>
       KShadowLrc draws the lyrics of the track that is playing on a floating
