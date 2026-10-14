@@ -168,6 +168,9 @@ void Application::openSettingsWindow()
         // evaluation; the settings object is shared with the overlay, so a change
         // made in either place reaches the other at once.
         m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("settings"), m_settings);
+        // The window's status line says what the lyrics are doing, which is the
+        // same answer the tray gives: both read this controller.
+        m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("lyricsController"), m_lyricsController.get());
         // The output picker can only show what is connected, so it reads the live
         // output list. Parented to the application, so it outlives the engine.
         m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("outputs"), new Outputs(this));

@@ -4,6 +4,7 @@
 #include "system/controlservice.h"
 
 #include "lyrics/controller.h"
+#include "lyrics/lyricstatus.h"
 
 #include <KGlobalAccel>
 #include <KLocalizedString>
@@ -94,7 +95,13 @@ ControlService::ControlService(LyricsController *controller, QObject *parent)
     updateToggleAction();
     updateToolTip();
 
+    // The tool tip carries both lines, so anything it shows has to redraw it:
+    // the offset, and the state -- together with the diagnostic that comes with
+    // a failure. The controller gates the state, so the demo/player going away
+    // arrives through stateChanged too.
     connect(m_controller, &LyricsController::lyricOffsetChanged, this, &ControlService::updateToolTip);
+    connect(m_controller, &LyricsController::stateChanged, this, &ControlService::updateToolTip);
+    connect(m_controller, &LyricsController::lastErrorChanged, this, &ControlService::updateToolTip);
 
     // Register the three global shortcuts. Each action is shared with the menu,
     // so the menu entry and the key press take exactly the same path.
@@ -179,7 +186,9 @@ void ControlService::createTray()
         m_tray->setIconByName(appId);
     }
 
-    m_tray->setToolTip(appId, i18n("KShadowLrc"), offsetLabel(m_controller->lyricOffset()));
+    // The tool tip itself is owned by updateToolTip(), which the constructor
+    // calls right after this; setting a second one here would be a copy of its
+    // wording waiting to drift out of date.
 
     connect(m_tray, &KStatusNotifierItem::activateRequested, this, [this](bool, const QPoint &) {
         Q_EMIT overlayVisibilityToggleRequested();
@@ -273,7 +282,12 @@ void ControlService::updateToolTip()
     if (!m_tray) {
         return;
     }
-    m_tray->setToolTip(QStringLiteral(KSHADOWLRC_APP_ID), i18n("KShadowLrc"), offsetLabel(m_controller->lyricOffset()));
+    // Two lines under the app name: what the lyrics are doing, then the offset.
+    // The wording comes from lyricstatus, which is also where the settings
+    // window's status line comes from, so the two cannot tell different stories.
+    const QString subtitle =
+        lyricstatus::statusText(m_controller->state(), m_controller->lastError()) + QLatin1Char('\n') + offsetLabel(m_controller->lyricOffset());
+    m_tray->setToolTip(QStringLiteral(KSHADOWLRC_APP_ID), i18n("KShadowLrc"), subtitle);
 }
 
 } // namespace kshadowlrc

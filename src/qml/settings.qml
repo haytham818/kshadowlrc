@@ -20,8 +20,22 @@ import org.kde.kirigami as Kirigami
  * through the object's changed signals. Nothing is buffered locally, so there is
  * no OK or Apply button and the window can be closed at any time.
  *
- * The keys are grouped exactly as in src/config/kshadowlrcsettings.kcfg:
- * General, Playback and Providers.
+ * The keys are grouped exactly as in src/config/kshadowlrcsettings.kcfg
+ * (General, Playback, Providers); the section headings spell those groups out
+ * in words rather than in the kcfg's names.
+ *
+ * Two things here are about the lyrics rather than a preference. The row at the
+ * very top says what the lyrics are doing right now, read from the
+ * `lyricsController` context property the overlay uses; it stays hidden when the
+ * host gave the window no controller. Its two lines come from that controller's
+ * `lyricStatus` and `lastError` properties, composed in C++ from
+ * src/lyrics/lyricstatus.h -- the one home for the wording, which the tray tool
+ * tip also goes through -- so this window keeps no copy of the sentences. The
+ * last section orders the lyric sources: three rows over
+ * root.resolvedSourceOrder() with up/down buttons, which write values only back
+ * into settings.sourceOrder. The rows are written out one by one rather than
+ * built by a Repeater, because a Repeater's delegates are not part of the
+ * window's object tree and the window's test counts the controls it finds there.
  *
  * The two enum combos bind their currentIndex straight to the int the KConfigXT
  * compiler generates, because kconfig_compiler emits old-style nested enums with
@@ -120,6 +134,115 @@ Kirigami.ApplicationWindow {
         newPlayerField.clear()
     }
 
+    // ---- Lyric sources ------------------------------------------------------
+
+    // The three lyric sources, in the order they are tried by default. The
+    // value is what the engine and the settings file use; `local` is a .lrc
+    // file next to the song or lyrics saved inside the song file itself.
+    readonly property var lyricSources: [
+        {
+            value: "netease",
+            label: i18n("NetEase"),
+            hint: i18n("Online. Synced lyrics, with a translation when one is available.")
+        },
+        {
+            value: "lrclib",
+            label: i18n("LRCLIB"),
+            hint: i18n("Online. Synced lyrics in a single language.")
+        },
+        {
+            value: "local",
+            label: i18n("Local file"),
+            hint: i18n("A .lrc file next to the song, or lyrics saved inside the song file.")
+        }
+    ]
+
+    // The source order as the engine reads it: unknown entries dropped, entries
+    // missing from the setting appended in the default order. The list shows
+    // this, so a hand-edited config file still lines up with three rows.
+    function resolvedSourceOrder() {
+        const known = root.lyricSources.map(source => source.value)
+        const ordered = []
+        const configured = settings.sourceOrder
+        for (let i = 0; i < configured.length; ++i) {
+            if (known.indexOf(configured[i]) !== -1 && ordered.indexOf(configured[i]) === -1) {
+                ordered.push(configured[i])
+            }
+        }
+        for (let i = 0; i < known.length; ++i) {
+            if (ordered.indexOf(known[i]) === -1) {
+                ordered.push(known[i])
+            }
+        }
+        return ordered
+    }
+
+    function sourceLabel(value) {
+        const source = root.lyricSources.find(entry => entry.value === value)
+        return source ? source.label : value
+    }
+
+    // The source the search-order list shows in one of its three rows, so a row
+    // can be written out statically and still follow the configured order.
+    function sourceAt(index) {
+        const order = root.resolvedSourceOrder()
+        return index >= 0 && index < order.length ? order[index] : ""
+    }
+
+    function sourceHint(value) {
+        const source = root.lyricSources.find(entry => entry.value === value)
+        return source ? source.hint : ""
+    }
+
+    // The two online sources can be switched off; the local file source has no
+    // switch, so this is always true for it.
+    function sourceEnabled(value) {
+        if (value === "netease") {
+            return settings.neteaseEnabled
+        }
+        if (value === "lrclib") {
+            return settings.lrclibEnabled
+        }
+        return true
+    }
+
+    function setSourceEnabled(value, enabled) {
+        if (value === "netease") {
+            settings.neteaseEnabled = enabled
+        } else if (value === "lrclib") {
+            settings.lrclibEnabled = enabled
+        }
+    }
+
+    // Move one source up (-1) or down (+1) and write the whole list back, values
+    // only, in display order.
+    function moveSource(index, delta) {
+        const order = root.resolvedSourceOrder()
+        const target = index + delta
+        if (index < 0 || index >= order.length || target < 0 || target >= order.length) {
+            return
+        }
+        const moved = order.splice(index, 1)[0]
+        order.splice(target, 0, moved)
+        settings.sourceOrder = order
+    }
+
+    // ---- Lyric status -------------------------------------------------------
+
+    // The host hands the window the lyric controller the overlay uses, as the
+    // `lyricsController` context property. A bare engine (the QML test) has
+    // none, so the row hides itself rather than naming something that is not
+    // there; typeof does not throw for an identifier that was never declared.
+    readonly property bool hasLyricController: typeof lyricsController !== "undefined"
+
+    // What the lyrics are doing, in words, straight from the controller. Both
+    // strings are composed in C++ from src/lyrics/lyricstatus.h, so this window
+    // keeps no copy of the sentences: lyricStatus is the sentence for the
+    // current state, and lyricError is the diagnostic it failed with. The engine
+    // clears the diagnostic on success, so no state check is needed for it.
+    readonly property string lyricStatus: root.hasLyricController ? lyricsController.lyricStatus : ""
+    readonly property string lyricError: root.hasLyricController ? lyricsController.lastError : ""
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         id: settingsPage
 
@@ -127,6 +250,39 @@ Kirigami.ApplicationWindow {
 
         Kirigami.FormLayout {
             id: form
+
+            // ---- Lyric status -----------------------------------------------
+
+            // What the lyrics are doing right now, at the top because it says
+            // something about this moment rather than a preference. The words
+            // come from the controller and never from this file. A failure adds
+            // the diagnostic underneath, small and dimmed, so it reads as an
+            // aside rather than as part of the sentence.
+            ColumnLayout {
+                Kirigami.FormData.label: i18n("Lyric status:")
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 20
+                spacing: Math.round(Kirigami.Units.smallSpacing / 2)
+                // Hidden only when the host gave the window no controller, which
+                // is what a bare QML load does.
+                visible: root.hasLyricController
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: root.lyricStatus
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    // Only when there is one; a successful resolution leaves the
+                    // diagnostic empty.
+                    visible: text.length > 0
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: root.lyricError
+                }
+            }
 
             // ---- General ----------------------------------------------------
 
@@ -419,25 +575,217 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            // ---- Providers --------------------------------------------------
+            // ---- Lyric sources ----------------------------------------------
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Providers")
+                Kirigami.FormData.label: i18n("Lyric sources")
             }
 
-            QQC2.Switch {
-                id: neteaseField
-                Kirigami.FormData.label: i18n("NetEase:")
-                checked: settings.neteaseEnabled
-                onToggled: settings.neteaseEnabled = checked
-            }
+            ColumnLayout {
+                Kirigami.FormData.label: i18n("Search order:")
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 24
+                spacing: Kirigami.Units.smallSpacing
 
-            QQC2.Switch {
-                id: lrclibField
-                Kirigami.FormData.label: i18n("LRCLIB:")
-                checked: settings.lrclibEnabled
-                onToggled: settings.lrclibEnabled = checked
+                // The three rows are written out one at a time rather than built
+                // by a Repeater: the settings window's test counts the controls
+                // it finds in the window's object tree, and a Repeater's
+                // delegates are not part of it. Each row reads its source from
+                // root.sourceAt(index), so the order still comes from
+                // settings.sourceOrder alone. The shared comment on the buttons
+                // and the switch sits by the first row.
+
+                // Row 0: the source tried first.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    Loader {
+                        Layout.alignment: Qt.AlignVCenter
+                        active: root.sourceAt(0) !== "local"
+                        sourceComponent: Component {
+                            QQC2.Switch {
+                                checked: root.sourceEnabled(root.sourceAt(0))
+                                onToggled: root.setSourceEnabled(root.sourceAt(0), checked)
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            text: root.sourceLabel(root.sourceAt(0))
+                        }
+
+                        // One line saying what the source is, so the order is a
+                        // choice between things a person recognises.
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font: Kirigami.Theme.smallFont
+                            opacity: 0.7
+                            text: root.sourceHint(root.sourceAt(0))
+                        }
+                    }
+
+                    // Buttons, not drag and drop: three rows, and the keys have
+                    // to work here as well as the pointer. The first row cannot
+                    // move up and the last cannot move down. Only the two online
+                    // sources carry a switch; the local file source has none, so
+                    // moving it last is how you stop it being used.
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-up"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move up")
+                        enabled: false
+                        onClicked: root.moveSource(0, -1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-down"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move down")
+                        enabled: root.sourceAt(1).length > 0
+                        onClicked: root.moveSource(0, 1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+                }
+
+                // Row 1: the source tried second.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    Loader {
+                        Layout.alignment: Qt.AlignVCenter
+                        active: root.sourceAt(1) !== "local"
+                        sourceComponent: Component {
+                            QQC2.Switch {
+                                checked: root.sourceEnabled(root.sourceAt(1))
+                                onToggled: root.setSourceEnabled(root.sourceAt(1), checked)
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            text: root.sourceLabel(root.sourceAt(1))
+                        }
+
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font: Kirigami.Theme.smallFont
+                            opacity: 0.7
+                            text: root.sourceHint(root.sourceAt(1))
+                        }
+                    }
+
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-up"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move up")
+                        enabled: root.sourceAt(1).length > 0
+                        onClicked: root.moveSource(1, -1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-down"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move down")
+                        enabled: root.sourceAt(2).length > 0
+                        onClicked: root.moveSource(1, 1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+                }
+
+                // Row 2: the source tried last.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    Loader {
+                        Layout.alignment: Qt.AlignVCenter
+                        active: root.sourceAt(2) !== "local"
+                        sourceComponent: Component {
+                            QQC2.Switch {
+                                checked: root.sourceEnabled(root.sourceAt(2))
+                                onToggled: root.setSourceEnabled(root.sourceAt(2), checked)
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            text: root.sourceLabel(root.sourceAt(2))
+                        }
+
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font: Kirigami.Theme.smallFont
+                            opacity: 0.7
+                            text: root.sourceHint(root.sourceAt(2))
+                        }
+                    }
+
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-up"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move up")
+                        enabled: root.sourceAt(2).length > 0
+                        onClicked: root.moveSource(2, -1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+
+                    QQC2.ToolButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        icon.name: "go-down"
+                        display: QQC2.AbstractButton.IconOnly
+                        text: i18n("Move down")
+                        enabled: false
+                        onClicked: root.moveSource(2, 1)
+
+                        QQC2.ToolTip.text: text
+                        QQC2.ToolTip.visible: hovered
+                    }
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: i18n("Sources are tried from top to bottom; the first one with lyrics for the song is used.")
+                }
             }
         }
     }

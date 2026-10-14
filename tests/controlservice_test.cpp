@@ -9,19 +9,27 @@
 //   - the offset step/clamp/reset rules through the very actions the menu and
 //     the shortcuts trigger, and that the value is persisted in the settings;
 //   - the settings/quit/overlay-toggle requests fire exactly once each;
-//   - setOverlayVisible() re-labels the toggle action.
+//   - setOverlayVisible() re-labels the toggle action;
+//   - the tray tool tip carries the lyric state above the offset, follows every
+//     state change through the controller, and puts the failure diagnostic on
+//     its own line;
+//   - lyricstatus::statusText() maps each of the five controller states to its
+//     agreed sentence: the one home for the wording, which both the tool tip
+//     and the settings window go through.
 //
 // KGlobalAccel's daemon is deliberately not asserted on: a bare
 // `dbus-run-session` has no kglobalacceld, so what it reports there says
 // nothing. Like the other bus tests, this re-executes itself under
 // `dbus-run-session` so no real session bus is involved, and points
-// XDG_CONFIG_HOME/XDG_CONFIG_DIRS at a private temporary directory so neither
-// KGlobalAccel nor the tray can write into the real config. A
-// KStatusNotifierItem needs a bus and a QApplication, so the platform plugin is
-// the offscreen one.
+// XDG_CONFIG_HOME/XDG_CONFIG_DIRS/XDG_CACHE_HOME at a private temporary
+// directory so neither KGlobalAccel, the tray nor the lyric cache can write into
+// the developer's real config. A KStatusNotifierItem needs a bus and a
+// QApplication, so the platform plugin is the offscreen one.
 
 #include "config/settings.h"
 #include "lyrics/controller.h"
+#include "lyrics/lyricstatus.h"
+#include "lyrics/lyrictypes.h"
 #include "system/controlservice.h"
 
 #include <KStatusNotifierItem>
@@ -33,6 +41,7 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextStream>
@@ -52,6 +61,58 @@ const QString kToggle = QStringLiteral("toggle-overlay");
 const QString kSettings = QStringLiteral("settings");
 const QString kQuit = QStringLiteral("quit");
 
+/*!
+ * A provider that answers only when the test tells it to, so the engine stays
+ * in Loading until then. That is what lets the tool tip be walked through
+ * Loading and Error without a network and without an event loop: the walk runs
+ * to the first unanswered search and stops there.
+ */
+class SilentProvider : public LyricProvider
+{
+public:
+    QString name() const override
+    {
+        return QStringLiteral("stub");
+    }
+    QString displayName() const override
+    {
+        return QStringLiteral("Stub");
+    }
+
+    void searchSong(quint64 requestId, const TrackMeta &track, int limit) override
+    {
+        Q_UNUSED(track)
+        Q_UNUSED(limit)
+        m_searchId = requestId;
+    }
+
+    void queryLyric(quint64 requestId, const QString &songId) override
+    {
+        Q_UNUSED(songId)
+        m_queryId = requestId;
+    }
+
+    void failSearch(const QString &error)
+    {
+        Q_EMIT searchFailed(m_searchId, error);
+    }
+
+    quint64 m_searchId = 0;
+    quint64 m_queryId = 0;
+};
+
+/*! A track the engine will walk for; nothing here comes from a real file. */
+TrackMeta toolTipTrack()
+{
+    TrackMeta track;
+    track.title = QStringLiteral("ControlService Tool Tip Song");
+    track.album = QStringLiteral("ControlService Test Album");
+    track.artists = {QStringLiteral("ControlService Test Artist")};
+    track.lengthMs = 200000;
+    track.uniqueSongId = QStringLiteral("file:///tmp/kshadowlrc-controlservice-test.mp3");
+    return track;
+}
+
 } // namespace
 
 class ControlServiceTest : public QObject
@@ -70,6 +131,8 @@ private Q_SLOTS:
     void requestsFireExactlyOnce();
     void overlayVisibilityRelabelsTheToggle();
     void trayToolTipAndSharedMenu();
+    void trayToolTipFollowsLyricState();
+    void statusTextPinsEachState();
     void conflictHelperIgnoresOurOwnRegistration();
 
 private:
@@ -226,20 +289,21 @@ void ControlServiceTest::trayToolTipAndSharedMenu()
         QFAIL("the service created no tray item");
     }
 
-    //    The tool tip subtitle tracks the offset, including a negative value,
-    //    and returns to zero on reset.
+    //    The tool tip subtitle stacks the lyric state above the offset, and the
+    //    offset line tracks the value including a negative one. Idle is the
+    //    state here: no player and no demo, so there is nothing to show.
     m_reset->trigger();
-    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Offset: 0"));
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: 0"));
     m_earlier->trigger();
     QVERIFY(m_controller.lyricOffset() == -ControlService::OffsetStepMs);
-    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Offset: -0.5 s"));
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: -0.5 s"));
     m_earlier->trigger();
     m_earlier->trigger();
     QVERIFY(m_controller.lyricOffset() == -3 * ControlService::OffsetStepMs);
-    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Offset: -1.5 s"));
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: -1.5 s"));
     m_reset->trigger();
     QVERIFY(m_controller.lyricOffset() == 0);
-    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Offset: 0"));
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: 0"));
 
     //    The context menu holds exactly the six documented actions, in order,
     //    with the three separators between the groups -- and those six entries
@@ -262,9 +326,84 @@ void ControlServiceTest::trayToolTipAndSharedMenu()
     }
 }
 
+void ControlServiceTest::trayToolTipFollowsLyricState()
+{
+    // 9. The tool tip's first line is the lyric state, and it follows the
+    //    controller: the tray is redrawn through the state and error signals,
+    //    not only through the offset. Every state is reached along the
+    //    controller's own path -- the demo gate for idle and found, the engine
+    //    directly for the rest -- so nothing here needs MPRIS or the network.
+    if (!m_tray) {
+        QFAIL("the service created no tray item");
+    }
+
+    //    Idle: no player and no demo, so the state is the controller's gate 0.
+    QVERIFY(m_controller.state() == 0);
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: 0"));
+
+    //    Found: the demo lyric goes in through the controller, so the new line
+    //    arrives on the controller's stateChanged signal.
+    m_controller.setTestMode();
+    QVERIFY(m_controller.state() == 2);
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Lyrics found.\nOffset: 0"));
+
+    //    Not found: the engine was answered with nothing at all, which is a
+    //    different story from a failure and gets its own line.
+    m_controller.engine()->setLyric(Lyric(), Lyric());
+    QVERIFY(m_controller.state() == 3);
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("No lyrics for this song.\nOffset: 0"));
+
+    //    Loading, then error: a provider that has not answered yet keeps the
+    //    walk in flight, and failing it is a transport failure. The diagnostic
+    //    takes a line of its own under the state, never the state's place.
+    SilentProvider provider;
+    m_controller.engine()->setProviders({&provider});
+    m_controller.engine()->setSourceOrder({QStringLiteral("stub")});
+    m_controller.engine()->setTrack(toolTipTrack());
+    QVERIFY(m_controller.state() == 1);
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Looking for lyrics…\nOffset: 0"));
+
+    provider.failSearch(QStringLiteral("network unreachable"));
+    QVERIFY(m_controller.state() == 4);
+    QVERIFY(m_controller.lastError() == QStringLiteral("network unreachable"));
+    QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Something went wrong while looking for lyrics.\nnetwork unreachable\nOffset: 0"));
+
+    // The provider was a stack object: take it out of the engine before it dies,
+    // and park the demo so nothing later inherits a half-finished resolution.
+    m_controller.engine()->setProviders({});
+    m_controller.stopDemo();
+}
+
+void ControlServiceTest::statusTextPinsEachState()
+{
+    // 10. The one home for the wording, both entry points. stateText() is the
+    //     sentence on its own -- LyricsController::lyricStatus hands it to the
+    //     settings window -- and statusText() appends the failure diagnostic as
+    //     a second line for the tray tool tip, which cannot style anything. Pin
+    //     the whole mapping here, so a reworded or reordered state is caught at
+    //     the source rather than discovered on screen.
+    const QStringList sentences = {
+        QStringLiteral("Nothing is playing."),
+        QStringLiteral("Looking for lyrics…"),
+        QStringLiteral("Lyrics found."),
+        QStringLiteral("No lyrics for this song."),
+        QStringLiteral("Something went wrong while looking for lyrics."),
+    };
+    for (int state = 0; state < sentences.size(); ++state) {
+        QCOMPARE(lyricstatus::stateText(state), sentences.at(state));
+        QCOMPARE(lyricstatus::statusText(state, QString()), sentences.at(state));
+    }
+
+    // statusText() adds the diagnostic as a second line, and only for a failure:
+    // a successful state carries no second line even when an error is handed in.
+    QCOMPARE(lyricstatus::statusText(4, QStringLiteral("network unreachable")),
+             QStringLiteral("Something went wrong while looking for lyrics.\nnetwork unreachable"));
+    QCOMPARE(lyricstatus::statusText(2, QStringLiteral("network unreachable")), QStringLiteral("Lyrics found."));
+}
+
 void ControlServiceTest::conflictHelperIgnoresOurOwnRegistration()
 {
-    // 9. The conflict helper. A key held only by our own component is not a
+    // 11. The conflict helper. A key held only by our own component is not a
     //    conflict: globalShortcutsByKey() reports our own registration as a
     //    holder, which is exactly what made isGlobalShortcutAvailable() lie.
     const QString ourComponent = QStringLiteral(KSHADOWLRC_APP_ID);
@@ -283,7 +422,8 @@ int main(int argc, char **argv)
     const bool inner = argc > 1 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--inner");
     if (inner) {
         // Before anything can open a config: keep KGlobalAccel and the tray out
-        // of the developer's real kshadowlrcrc and kglobalshortcutsrc.
+        // of the developer's real kshadowlrcrc and kglobalshortcutsrc, and keep
+        // the lyric cache (QStandardPaths::CacheLocation) out of their cache.
         QTemporaryDir tempDir;
         if (!tempDir.isValid()) {
             std::fprintf(stderr, "FAIL: could not create a temporary config directory\n");
@@ -291,6 +431,7 @@ int main(int argc, char **argv)
         }
         qputenv("XDG_CONFIG_HOME", tempDir.path().toUtf8());
         qputenv("XDG_CONFIG_DIRS", tempDir.path().toUtf8());
+        qputenv("XDG_CACHE_HOME", tempDir.path().toUtf8());
 
         QApplication app(argc, argv);
         // The application id is what lets the conflict helper tell our own

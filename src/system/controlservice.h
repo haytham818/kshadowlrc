@@ -79,7 +79,7 @@ private:
     void clampAndSetOffset(qint64 proposedMs);
     /*! Re-label and re-check the toggle action to match m_overlayVisible. */
     void updateToggleAction();
-    /*! Push the current offset into the tray tool tip. */
+    /*! Push the current lyric state and offset into the tray tool tip. */
     void updateToolTip();
 
     LyricsController *m_controller = nullptr;
