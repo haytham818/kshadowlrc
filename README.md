@@ -21,12 +21,18 @@ in the background.
 - Looks lyrics up by title, artist and duration through NetEase Cloud Music
   and LRCLIB, and caches what it finds so a track played once loads without a
   lookup.
+- Uses the file's own lyrics when it has them — a `.lrc` beside the audio file,
+  or the lyrics written into its tag. Where that source sits among the online
+  ones is yours to set: see [Lyrics on your own disk](#lyrics-on-your-own-disk).
 - Shows the current line, its translation when the source has one, and the
   lines after it, dimmed.
 - Follows the configuration while it runs: font, size, colour and outline,
   how many upcoming lines to show, which screen edge and how far from it,
-  click-through, which output to land on, the lyric offset, and which
-  providers to ask.
+  click-through, which output to land on, the lyric offset, and which lyric
+  sources to ask, in which order.
+- Says what the lyrics are doing whenever there are none: the tray tooltip and
+  the settings window tell "still looking" apart from "none for this song" and
+  from "the lookup failed".
 
 ## Requirements
 
@@ -37,12 +43,13 @@ in the background.
   [CMakeLists.txt](CMakeLists.txt).
 - Development packages for KGlobalAccel and StatusNotifierItem for the tray
   icon and the global shortcuts.
+- TagLib, for the lyrics written into an audio file's tag.
 - Optional: KDBusAddons, which adds the single-instance guard. Without it the
   build is complete and a second copy would simply start.
 
 Package names differ between distributions; under Fedora they are
-`kf6-kglobalaccel-devel`, `kf6-kstatusnotifieritem-devel` and
-`kf6-kdbusaddons-devel`.
+`kf6-kglobalaccel-devel`, `kf6-kstatusnotifieritem-devel`,
+`taglib-devel` and `kf6-kdbusaddons-devel`.
 
 ## Build
 
@@ -68,6 +75,26 @@ metainfo and the icon.
   nothing is playing.
 - `--settings` opens the settings window at startup. It is also in the tray
   menu.
+
+## Lyrics on your own disk
+
+A local file's own lyrics come from two places, in this order:
+
+- `<file>.lrc` beside the audio file, with `<file>.zh.lrc` next to it when you
+  have a translation. The audio file's extension is dropped, so `song.flac`
+  reads `song.lrc`.
+- The file's own tag, when there is no sidecar: the `LYRICS` comment of a FLAC
+  or Ogg file, an ID3v2 `USLT` frame in an MP3, the `©lyr` atom of an M4A, the
+  `UNSYNCEDLYRICS` value of an APE file.
+
+A lyric with no timestamps in it is only used when nothing else has one for
+that song — it cannot follow the music. A tag that puts the original and its
+translation on the same line is shown the way it is written.
+
+Where this source sits relative to the online ones is the `sourceOrder`
+setting; the values it accepts and its default are in
+[`src/config/kshadowlrcsettings.kcfg`](src/config/kshadowlrcsettings.kcfg),
+and the settings window orders them for you.
 
 ## Configuring
 
@@ -106,8 +133,13 @@ maximum either way; both numbers are `OffsetStepMs` and `MaxOffsetMs` in
   `org.mpris.MediaPlayer2.*` and reports the track, its status and the
   playback position. Players can be ignored by name; the rule an entry follows
   is in [src/player/playermatch.h](src/player/playermatch.h).
-- [`LyricEngine`](src/lyrics/lyricengine.cpp) takes a track, asks the enabled
-  providers for it and picks the timestamped lines to show.
+- [`LyricEngine`](src/lyrics/lyricengine.cpp) takes a track and walks the lyric
+  sources in the configured order, stopping at the first one that has
+  something, then picks the timestamped lines to show.
+- [`LocalFiles`](src/lyrics/localsource.cpp) is the source that reads a sidecar
+  or an embedded tag;
+  [src/lyrics/localtags.cpp](src/lyrics/localtags.cpp) is the only file that
+  includes TagLib.
 - Providers implement [`LyricProvider`](src/lyrics/provider.h) and live in
   [src/lyrics/providers/](src/lyrics/providers/); every call is asynchronous.
 - [`LyricsController`](src/lyrics/controller.cpp) is the QML bridge.
@@ -123,7 +155,9 @@ registered by ECM's `ecm_add_tests`. `ctest --test-dir build` runs them all and
 
 They are deterministic and offline: the parsers are driven with saved fixtures,
 and the tests that need a session bus start a private one, so nothing reaches
-the network and nothing touches the session you are logged into.
+the network and nothing touches the session you are logged into. The tag tests
+write their tags onto the small audio files committed under
+[`tests/data/`](tests/data/), so they need no encoder either.
 
 ## License
 
