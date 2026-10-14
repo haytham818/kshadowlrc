@@ -76,6 +76,9 @@ target_link_libraries(kshadowlrc_lib PUBLIC
     Qt6::WaylandClient
     KF6::CoreAddons
     KF6::I18n
+    # KLocalization::setupLocalizedContext(), which puts i18n() into a QML
+    # engine's root context. Ships inside the KI18n package as KI18nQml.
+    KF6::I18nQml
     KF6::ConfigCore
     KF6::ConfigGui
     KF6::WindowSystem
