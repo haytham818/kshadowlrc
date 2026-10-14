@@ -91,6 +91,11 @@
       <default>1000</default>
       <min>1</min>
     </entry>
+
+    <entry name="ignoredPlayers" type="StringList">
+      <label>MPRIS players to ignore: an entry with a * or ? is a case-insensitive glob over the whole bus name, any other entry matches the bus name itself, a dot-separated prefix of it, or one of its dot-separated parts</label>
+      <default>org.mpris.MediaPlayer2.firefox,org.mpris.MediaPlayer2.playerctld</default>
+    </entry>
   </group>
 
   <group name="Providers">

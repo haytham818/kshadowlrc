@@ -95,6 +95,13 @@ public:
     int syncIntervalMs() const;
     void setSyncIntervalMs(int ms);
 
+    /*!
+     * Bus names to skip when choosing a player. See the .kcfg entry for the
+     * matching rules. Changing this re-evaluates the current player immediately.
+     */
+    void setIgnoredPlayers(const QStringList &patterns);
+    QStringList ignoredPlayers() const;
+
     /*! Re-scan for players and reconnect to the best candidate right now. */
     void reconnect();
 

@@ -5,6 +5,7 @@
 
 #include "mprismeta.h"
 #include "mprisplayer.h"
+#include "playermatch.h"
 
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -55,10 +56,14 @@ constexpr qint64 kJumpThresholdMs = 250;
 constexpr int kMaxRefreshFailures = 3;
 
 /*!
- * Players known to report garbage or to mirror another player. Matched as bus
- * name prefixes. This is a static list for now; configuration comes later.
+ * Players skipped out of the box: Firefox and playerctld, which report garbage
+ * or mirror another player. These are the built-in defaults of the
+ * `ignoredPlayers` setting; the settings layer replaces them with the user's
+ * list. Each entry follows the matching rules in playermatch.h: with no
+ * wildcard, `org.mpris.MediaPlayer2.firefox` matches the instance-suffixed bus
+ * name `org.mpris.MediaPlayer2.firefox.instance1` as a dot-boundary prefix.
  */
-const QStringList kIgnoredPlayerPrefixes = {
+const QStringList kDefaultIgnoredPlayers = {
     QStringLiteral("org.mpris.MediaPlayer2.firefox"),
     QStringLiteral("org.mpris.MediaPlayer2.playerctld"),
 };
@@ -101,6 +106,7 @@ struct PlayerTrackerPrivate {
     bool positionKnown = false;
     qint64 lyricOffsetMs = 0;
     int syncIntervalMs = kDefaultSyncIntervalMs;
+    QStringList ignoredPlayers = kDefaultIgnoredPlayers;
     bool started = false;
     bool scanning = false;
     quint64 scanId = 0;
@@ -117,16 +123,6 @@ struct PlayerTrackerPrivate {
 PlayerTrackerPrivate *privOf(const PlayerTracker *tracker)
 {
     return static_cast<PlayerTrackerPrivate *>(tracker->property(kPrivateProperty).value<void *>());
-}
-
-bool isIgnoredPlayer(const QString &name)
-{
-    for (const QString &prefix : kIgnoredPlayerPrefixes) {
-        if (name.startsWith(prefix)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 int statusRank(PlaybackStatus status)
@@ -227,7 +223,7 @@ void startScan(PlayerTracker *tracker)
                                QStringList candidates;
                                const QStringList names = reply.value();
                                for (const QString &name : names) {
-                                   if (name.startsWith(kMprisPrefix) && !isIgnoredPlayer(name)) {
+                                   if (name.startsWith(kMprisPrefix) && !isIgnoredPlayer(priv->ignoredPlayers, name)) {
                                        candidates.append(name);
                                    }
                                }
@@ -330,7 +326,9 @@ void finishScan(PlayerTracker *tracker, quint64 scanId)
     int bestRank = -1;
     qint64 bestActivity = -1;
     for (const ScanResult &result : std::as_const(priv->scanResults)) {
-        if (!result.ok) {
+        if (!result.ok || isIgnoredPlayer(priv->ignoredPlayers, result.wellKnown)) {
+            // Re-checked here, not only when the candidates were collected: the
+            // ignore list can change while this scan's replies are in flight.
             continue;
         }
         const int rank = statusRank(result.status);
@@ -360,6 +358,12 @@ void finishScan(PlayerTracker *tracker, quint64 scanId)
 void setActivePlayer(PlayerTracker *tracker, const ScanResult &result)
 {
     auto *priv = privOf(tracker);
+    if (isIgnoredPlayer(priv->ignoredPlayers, result.wellKnown)) {
+        // The single choke point: an ignored player is never selected, whatever
+        // path led here.
+        clearActive(tracker);
+        return;
+    }
     if (priv->active && priv->active->wellKnownName() == result.wellKnown && priv->active->ownerName() == result.owner) {
         return;
     }
@@ -738,6 +742,33 @@ void PlayerTracker::setSyncIntervalMs(int ms)
     }
     priv->syncIntervalMs = interval;
     priv->timer->setInterval(interval);
+}
+
+QStringList PlayerTracker::ignoredPlayers() const
+{
+    return privOf(this)->ignoredPlayers;
+}
+
+void PlayerTracker::setIgnoredPlayers(const QStringList &patterns)
+{
+    auto *priv = privOf(this);
+    if (priv->ignoredPlayers == patterns) {
+        return;
+    }
+    const bool replacedActive = priv->active && isIgnoredPlayer(patterns, priv->active->wellKnownName());
+    priv->ignoredPlayers = patterns;
+    qCInfo(lcPlayerTracker) << "ignored players:" << (patterns.isEmpty() ? QStringList{QStringLiteral("<none>")} : patterns);
+
+    if (!priv->started) {
+        return;
+    }
+    // A freshly ignored active player must go at once, and a freshly allowed one
+    // must be pickable at once: re-scan now instead of waiting for the next
+    // NameOwnerChanged. reconnect() is the existing mechanism, reused.
+    if (replacedActive) {
+        clearActive(this);
+    }
+    reconnect();
 }
 
 void PlayerTracker::reconnect()
