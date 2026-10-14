@@ -65,6 +65,7 @@ target_link_libraries(kshadowlrc_lib PUBLIC
     KF6::ConfigCore
     KF6::ConfigGui
     KF6::WindowSystem
+    KF6::Kirigami
     LayerShellQt::Interface
 )
 # qpa/qplatformnativeinterface.h (raw wl_surface access for the input region).
@@ -88,3 +89,23 @@ add_executable(kshadowlrc main.cpp)
 target_link_libraries(kshadowlrc PRIVATE kshadowlrc_lib)
 
 install(TARGETS kshadowlrc ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+
+# Application identity and packaging. The three files are named after
+# KSHADOWLRC_APP_ID (see the top-level CMakeLists.txt): the desktop file's base
+# name must be the app id for the portal to resolve it, the AppStream component
+# id must match the desktop file, and Icon= names the icon installed below.
+install(FILES "${KSHADOWLRC_APP_ID}.desktop"
+    DESTINATION ${KDE_INSTALL_APPDIR}
+)
+install(FILES "${KSHADOWLRC_APP_ID}.metainfo.xml"
+    DESTINATION ${KDE_INSTALL_METAINFODIR}
+)
+# NOTE: the metainfo deliberately carries no <url type="homepage"> yet, because
+# the project has no published URL to point at. appstreamcli validate therefore
+# reports exactly one warning (url-homepage-missing) and exits non-zero, which
+# makes ECM's appstreamtest fail once the project has been installed (it skips
+# itself while there is no install manifest). Supplying the real homepage URL
+# is all it takes to turn that test green again.
+install(FILES "${KSHADOWLRC_APP_ID}.svg"
+    DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps
+)

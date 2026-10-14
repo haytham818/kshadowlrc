@@ -44,6 +44,10 @@ find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS
     I18n
     Config
     WindowSystem
+    # Kirigami gives the overlay and the settings window the KDE look, and
+    # linking it is what makes the org.kde.kirigami QML module resolvable at
+    # runtime instead of merely installed on the developer's machine.
+    Kirigami
 )
 
 # Optional: KDBusService backs the single-instance guard. Its devel package is
@@ -61,6 +65,16 @@ ecm_set_disabled_deprecation_versions(
 )
 
 add_compile_definitions(KSHADOWLRC_VERSION_STRING="${PROJECT_VERSION}")
+
+# The application identity, in one place. It is the reverse-DNS application id
+# that the host portal, the tray and KGlobalAccel key off: it is the desktop
+# file's base name, the AppStream component id, the icon name, and the value
+# KAboutData reports as the desktop file name and the component name (from
+# which QCoreApplication::applicationName is taken). The packaging files in
+# src/ are named after it; everything that has to agree is either generated
+# from this variable or names the same files.
+set(KSHADOWLRC_APP_ID "io.github.haytham818.kshadowlrc")
+add_compile_definitions(KSHADOWLRC_APP_ID="${KSHADOWLRC_APP_ID}")
 
 add_subdirectory(src)
 add_subdirectory(tests)

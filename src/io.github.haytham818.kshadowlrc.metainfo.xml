@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component type="desktop-application">
+  <id>io.github.haytham818.kshadowlrc</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>KShadowLrc</name>
+  <summary>Floating desktop lyrics overlay for KDE Plasma 6 on Wayland</summary>
+  <description>
+    <p>
+      KShadowLrc draws the lyrics of the track that is playing on a floating
+      overlay that sits on top of the other windows. It is a wlr-layer-shell
+      surface, so on Plasma 6 Wayland it stays above the desktop, out of the
+      taskbar and click-through without any window rule, and it follows the
+      output and the edge it is configured for.
+    </p>
+    <p>
+      The playing track is read from the desktop's media players over MPRIS:
+      title, artist, album, length and the playback position, which the overlay
+      follows while the track plays and pauses. Lyrics are looked up by title,
+      artist and duration and are kept in a local cache, so a track that has
+      been played once loads its lyrics without a lookup. When the source has a
+      translation for a line, it is shown next to the original, or instead of
+      it, as configured.
+    </p>
+    <p>
+      Font family and size, text colour, outline, the number of visible lines
+      and the line layout, the screen edge, the margin and click-through can be
+      configured; a lyric offset compensates for a player that reports its
+      position imprecisely.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.haytham818.kshadowlrc.desktop</launchable>
+  <icon type="stock">io.github.haytham818.kshadowlrc</icon>
+  <provides>
+    <binary>kshadowlrc</binary>
+  </provides>
+  <categories>
+    <category>Qt</category>
+    <category>KDE</category>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <keywords>
+    <keyword>lyrics</keyword>
+    <keyword>karaoke</keyword>
+    <keyword>subtitles</keyword>
+    <keyword>overlay</keyword>
+    <keyword>mpris</keyword>
+    <keyword>plasma</keyword>
+    <keyword>wayland</keyword>
+  </keywords>
+  <developer id="io.github.haytham818">
+    <name>KShadowLrc Contributors</name>
+  </developer>
+  <releases>
+    <release version="0.1.0" date="2026-10-14"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

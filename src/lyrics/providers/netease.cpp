@@ -44,13 +44,15 @@ constexpr int kBackoffBaseMs = 500;
 constexpr int kBackoffCapMs = 4000;
 
 /*! Chrome-looking part after our own identifier, cheaply lowering the odds of
- * being classified as a bot. */
+ * being classified as a bot. The parenthesised token is the application id: the
+ * project has no published URL, and sending servers a made-up one would be a lie
+ * in every request. */
 const QString &userAgent()
 {
-    static const QString agent = QStringLiteral(
-                                     "KShadowLrc/%1 (+https://github.com/kshadowlrc/kshadowlrc) "
-                                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                                     "Chrome/120.0.0.0 Safari/537.36")
+    static const QString agent = QStringLiteral("KShadowLrc/%1 (+" KSHADOWLRC_APP_ID
+                                                ") "
+                                                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                "Chrome/120.0.0.0 Safari/537.36")
                                      .arg(QStringLiteral(KSHADOWLRC_VERSION_STRING));
     return agent;
 }

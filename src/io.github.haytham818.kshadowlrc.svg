@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileCopyrightText: 2026 KShadowLrc Contributors -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>KShadowLrc</title>
+  <rect x="3" y="13" width="58" height="38" rx="9" fill="#3daee9"/>
+  <rect x="4" y="14" width="56" height="36" rx="8" fill="none" stroke="#1c6a94" stroke-width="2"/>
+  <rect x="12" y="23" width="40" height="7" rx="3.5" fill="#ffffff"/>
+  <rect x="12" y="35" width="24" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.7"/>
+</svg>

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=KShadowLrc
+GenericName=Desktop Lyrics
+Comment=Floating always-on-top lyrics for the track that is playing
+Exec=kshadowlrc
+Icon=io.github.haytham818.kshadowlrc
+Terminal=false
+Categories=Qt;KDE;AudioVideo;Audio;
+Keywords=lyrics;lyric;karaoke;subtitles;overlay;mpris;plasma;wayland;
+StartupNotify=false

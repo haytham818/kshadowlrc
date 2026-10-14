@@ -43,15 +43,25 @@ Application::~Application() = default;
 
 KAboutData Application::makeAboutData()
 {
-    KAboutData aboutData(QStringLiteral("kshadowlrc"),
+    // The component name is the application id: KAboutData::setApplicationData
+    // makes it QCoreApplication::applicationName, which is what the host portal
+    // and KGlobalAccel identify us by. The desktop file, the AppStream
+    // metainfo and the icon are all named after it.
+    KAboutData aboutData(QStringLiteral(KSHADOWLRC_APP_ID),
                          i18n("KShadowLrc"),
                          QStringLiteral(KSHADOWLRC_VERSION_STRING),
                          i18n("Floating desktop lyrics overlay for KDE Plasma 6"),
                          KAboutLicense::GPL_V3);
-    aboutData.setOrganizationDomain(QByteArrayLiteral("io.github"));
-    aboutData.setHomepage(QStringLiteral("https://github.com/kshadowlrc/kshadowlrc"));
-    aboutData.setBugAddress(QByteArrayLiteral("https://github.com/kshadowlrc/kshadowlrc/issues"));
-    aboutData.setDesktopFileName(QStringLiteral("io.github.kshadowlrc"));
+    // Deliberately no organization domain. KDBusService builds its single-instance
+    // bus name as reversed(organizationDomain) + "." + applicationName, and the
+    // component name is already a reverse-DNS id, so setting one here would yield
+    // the doubled "haytham818.github.io.io.github.haytham818.kshadowlrc". Leaving
+    // it empty makes the bus name exactly the application id.
+    // No homepage and no bug address: the project has no published URL yet, and
+    // a made-up one would send people to a page that is not ours. Passed
+    // explicitly so the KDE-wide default bug address is not inherited either.
+    aboutData.setBugAddress(QByteArray());
+    aboutData.setDesktopFileName(QStringLiteral(KSHADOWLRC_APP_ID));
     return aboutData;
 }
 
@@ -122,7 +132,7 @@ int Application::run(const KAboutData &aboutData, const QString &outputName, boo
 
     // Application metadata; also sets the desktop file name used by D-Bus.
     KAboutData::setApplicationData(aboutData);
-    setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.kshadowlrc")));
+    setWindowIcon(QIcon::fromTheme(QStringLiteral(KSHADOWLRC_APP_ID)));
     // Never quit just because the (single) window is closed while remapping.
     setQuitOnLastWindowClosed(false);
 
