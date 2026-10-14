@@ -52,6 +52,13 @@ int main(int argc, char *argv[])
     parser.setSingleDashWordOptionMode(QCommandLineParser::ParseAsLongOptions);
     (void)parser.parse(arguments); // unknown options are reported by pass 2
     if (parser.isSet(QStringLiteral("help"))) {
+        // QCommandLineParser takes the name in the usage line from the running
+        // application's argv[0], and prints the literal "<executable_name>" when
+        // no instance exists to read it from. This path has to work without a
+        // display, so it cannot be the QApplication below; QCoreApplication needs
+        // no display and is enough. showHelp() ends the process, so the two never
+        // coexist.
+        QCoreApplication application(argc, argv);
         parser.showHelp();
     }
     if (parser.isSet(versionOption)) {
