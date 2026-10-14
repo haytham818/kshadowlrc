@@ -1,0 +1,8 @@
+File=kshadowlrcsettings.kcfg
+ClassName=KShadowLrcSettings
+NameSpace=kshadowlrc
+Mutators=true
+DefaultValueGetters=true
+GenerateProperties=true
+ParentInConstructor=true
+Singleton=false

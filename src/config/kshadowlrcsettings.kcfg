@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+                          http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name="kshadowlrcrc"/>
+
+  <group name="General">
+    <entry name="fontFamily" type="String">
+      <label>Font family for the lyrics, empty to use the default font</label>
+      <default></default>
+    </entry>
+
+    <entry name="fontSize" type="Int">
+      <label>Lyrics font size in points</label>
+      <default>32</default>
+      <min>1</min>
+    </entry>
+
+    <entry name="textColor" type="String">
+      <label>Lyrics text color</label>
+      <default>#ffffff</default>
+    </entry>
+
+    <entry name="outlineEnabled" type="Bool">
+      <label>Draw an outline around the lyrics text</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="displayMode" type="Enum">
+      <label>Which lyric line to show</label>
+      <choices>
+        <choice name="Original">
+          <label>Original line only</label>
+        </choice>
+        <choice name="Translation">
+          <label>Translation with the original as fallback</label>
+        </choice>
+        <choice name="Both">
+          <label>Both the original and the translation</label>
+        </choice>
+      </choices>
+      <default>Both</default>
+    </entry>
+
+    <entry name="visibleLines" type="Int">
+      <label>Additional lyric lines shown below the current one</label>
+      <default>2</default>
+      <min>0</min>
+      <max>10</max>
+    </entry>
+
+    <entry name="edge" type="Enum">
+      <label>Screen edge the overlay is anchored to</label>
+      <choices>
+        <choice name="Top">
+          <label>Top edge</label>
+        </choice>
+        <choice name="Bottom">
+          <label>Bottom edge</label>
+        </choice>
+      </choices>
+      <default>Bottom</default>
+    </entry>
+
+    <entry name="margin" type="Int">
+      <label>Gap between the overlay and the screen edge in logical pixels</label>
+      <default>64</default>
+      <min>0</min>
+    </entry>
+
+    <entry name="clickThrough" type="Bool">
+      <label>Let pointer events pass through the overlay</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="outputName" type="String">
+      <label>Wayland output to place the overlay on, empty for the primary output</label>
+      <default></default>
+    </entry>
+  </group>
+
+  <group name="Playback">
+    <entry name="lyricOffsetMs" type="Int">
+      <label>Lyric time offset in milliseconds, positive shifts lyrics earlier</label>
+      <default>0</default>
+    </entry>
+
+    <entry name="syncIntervalMs" type="Int">
+      <label>MPRIS playback position poll interval in milliseconds</label>
+      <default>1000</default>
+      <min>1</min>
+    </entry>
+  </group>
+
+  <group name="Providers">
+    <entry name="neteaseEnabled" type="Bool">
+      <label>Look up lyrics through the NetEase provider</label>
+      <default>true</default>
+    </entry>
+
+    <entry name="lrclibEnabled" type="Bool">
+      <label>Look up lyrics through the LRCLib provider</label>
+      <default>true</default>
+    </entry>
+  </group>
+</kcfg>
