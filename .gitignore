@@ -1,0 +1,12 @@
+# Read-only reference checkouts (krema, waylyrics, ...)
+RefRepo/
+
+# Build trees (build/, build-debug/, build-release/, ...)
+build*/
+
+# Local caches
+.cache/
+
+# clangd index / compilation database companion
+.clangd
+compile_commands.json
