@@ -33,6 +33,15 @@ ecm_add_tests(${KSHADOWLRC_TEST_SOURCES}
     TEST_NAMES_VAR KSHADOWLRC_TEST_NAMES
 )
 
+# The local lyric-source tests read tiny committed audio fixtures under
+# tests/data/ (see localtags_test.cpp). The directory is baked in at compile
+# time so the tests find it no matter where they are run from.
+foreach(_local_test localsource_test localtags_test)
+    target_compile_definitions(${_local_test} PRIVATE
+        KSHADOWLRC_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    )
+endforeach()
+
 # The MPRIS tests re-exec themselves under dbus-run-session and print
 # "SKIP: ..." when it is not installed. Report that as a skip rather than as a
 # pass: the suite must not claim to have verified something it never ran.

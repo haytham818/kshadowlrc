@@ -86,6 +86,9 @@ target_link_libraries(kshadowlrc_lib PUBLIC
     KF6::GlobalAccel
     KF6::StatusNotifierItem
     LayerShellQt::Interface
+    # Embedded lyrics (src/lyrics/localtags.cpp). PUBLIC so the fixture-writing
+    # tests can include TagLib headers to build a tag to read back.
+    TagLib::tag
 )
 # qpa/qplatformnativeinterface.h (raw wl_surface access for the input region).
 target_link_libraries(kshadowlrc_lib PRIVATE Qt6::GuiPrivate)

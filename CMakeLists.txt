@@ -68,6 +68,11 @@ add_feature_info("Single instance via D-Bus (KF6DBusAddons)" KF6DBusAddons_FOUND
 
 find_package(LayerShellQt ${LAYER_SHELL_QT_MIN_VERSION} REQUIRED)
 
+# Embedded lyrics live in the file's own tag, and hand-rolling a reader for
+# ID3v2 USLT, Vorbis comments and MP4 ilst atoms is not worth it: TagLib reads
+# them all. Only src/lyrics/localtags.cpp includes its headers.
+find_package(TagLib REQUIRED)
+
 ecm_set_disabled_deprecation_versions(
     QT ${QT_MIN_VERSION}
     KF ${KF6_MIN_VERSION}
