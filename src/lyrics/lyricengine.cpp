@@ -4,6 +4,7 @@
 #include "lyrics/lyricengine.h"
 
 #include "kshadowlrc.h"
+#include "lyrics/localsource.h"
 #include "lyrics/lrcparser.h"
 #include "lyrics/lyriccache.h"
 
@@ -89,6 +90,16 @@ void LyricEngine::setProviders(QList<LyricProvider *> providers)
     }
 }
 
+void LyricEngine::setLocalSource(LocalSource *source)
+{
+    m_localSource = source;
+}
+
+void LyricEngine::setSourceOrder(const QStringList &order)
+{
+    m_sourceOrder = order;
+}
+
 void LyricEngine::setTrack(const TrackMeta &track)
 {
     if (m_hasProcessedTrack && track.sameSong(m_track)) {
@@ -100,10 +111,8 @@ void LyricEngine::setTrack(const TrackMeta &track)
     ++m_generation;
     m_pendingSearches.clear();
     m_pendingLyrics.clear();
-    m_candidates.clear();
-    m_searchesPending = 0;
-    m_queryIndex = 0;
     m_offset = 0;
+    setLastError(QString());
 
     m_origin.clear();
     m_translation.clear();
@@ -116,43 +125,264 @@ void LyricEngine::setTrack(const TrackMeta &track)
         return;
     }
 
-    if (const std::optional<CacheEntry> cached = LyricCache::lookup(track)) {
-        const Lyric origin = parseLrc(cached->store.lyric);
-        const Lyric translation = pairTranslation(origin, parseLrc(cached->store.tlyric));
-        if (!origin.isEmpty() && !isPlaceholderLyric(origin)) {
-            m_offset = cached->offsetMs;
-            applyFoundLyric(origin, translation);
-            qCDebug(lcLyrics) << "cache hit for" << track.title;
-            return;
+    m_steps = resolveSteps();
+    m_stepIndex = 0;
+    m_currentProviderIndex = -1;
+    m_candidateIndex = 0;
+    m_searchesStarted = false;
+    m_queryPending = false;
+    m_walkDone = false;
+    m_candidatesByProvider.clear();
+    m_searchesAnswered.clear();
+    m_localFallbackOrigin.clear();
+    m_localFallbackTranslation.clear();
+    m_localFallbackSet = false;
+
+    advanceWalk();
+}
+
+QStringList LyricEngine::effectiveOrder() const
+{
+    static const QStringList defaults = {QStringLiteral("netease"), QStringLiteral("lrclib"), QStringLiteral("local")};
+    const QStringList requested = m_sourceOrder.isEmpty() ? defaults : m_sourceOrder;
+
+    const auto isKnown = [this](const QString &id) {
+        if (id == QLatin1String("local")) {
+            return true;
+        }
+        for (const LyricProvider *provider : m_providers) {
+            if (provider && provider->name() == id) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QStringList order;
+    const auto appendKnown = [&order, &isKnown](const QStringList &ids) {
+        for (const QString &id : ids) {
+            if (!id.isEmpty() && !order.contains(id) && isKnown(id)) {
+                order.append(id);
+            }
+        }
+    };
+    appendKnown(requested);
+    appendKnown(defaults);
+    return order;
+}
+
+QList<LyricEngine::Step> LyricEngine::resolveSteps() const
+{
+    QList<Step> steps;
+    for (const QString &id : effectiveOrder()) {
+        if (id == QLatin1String("local")) {
+            steps.append({Step::Local, -1});
+            continue;
+        }
+        for (int i = 0; i < m_providers.size(); ++i) {
+            if (m_providers.at(i) && m_providers.at(i)->name() == id) {
+                steps.append({Step::Provider, i});
+                break;
+            }
         }
     }
+    return steps;
+}
 
-    if (m_providers.isEmpty()) {
-        setState(State::NotFound);
-        updateCurrent(true);
+void LyricEngine::advanceWalk()
+{
+    // Provider answers can arrive synchronously (tests, cached providers), which
+    // re-enters here while the loop is running. The running loop picks the new
+    // state up after the emitting call returns.
+    if (m_walking) {
+        return;
+    }
+    m_walking = true;
+
+    for (;;) {
+        if (m_walkDone) {
+            break;
+        }
+        if (m_stepIndex >= m_steps.size()) {
+            finishWalk();
+            break;
+        }
+
+        const Step step = m_steps.at(m_stepIndex);
+        if (step.kind == Step::Local) {
+            if (tryLocalStep()) {
+                break;
+            }
+            ++m_stepIndex;
+            continue;
+        }
+
+        const int providerIndex = step.providerIndex;
+        if (!m_searchesStarted) {
+            // The cache sits immediately before the first provider step, after
+            // any local step that preceded it: a cached lyric came from a
+            // provider, so it must not outrank a user's own local file.
+            if (tryCacheStep()) {
+                break;
+            }
+            startProviderSearches();
+        }
+
+        // A provider step always searches, so it is answered eventually; until
+        // then, nothing later can be decided.
+        if (!m_searchesAnswered.contains(providerIndex)) {
+            break;
+        }
+
+        if (m_currentProviderIndex != providerIndex) {
+            m_currentProviderIndex = providerIndex;
+            m_candidateIndex = 0;
+        }
+
+        // A candidate for this provider is already being fetched: an unrelated
+        // answer (another provider's search) must not re-issue the same query.
+        if (m_queryPending) {
+            break;
+        }
+
+        if (tryNextCandidate(providerIndex)) {
+            if (m_walkDone) {
+                break; // an answer arrived synchronously and found the lyric
+            }
+            if (m_queryPending) {
+                break; // the answer is on its way
+            }
+            continue; // a synchronous empty answer: try the next candidate
+        }
+
+        ++m_stepIndex;
+    }
+
+    m_walking = false;
+}
+
+void LyricEngine::finishWalk()
+{
+    m_walkDone = true;
+    m_queryPending = false;
+
+    // Content wins over both NotFound and Error, exactly as a provider's plain
+    // lyric does: applyFoundLyric() clears any failure recorded on the way here.
+    if (m_localFallbackSet) {
+        qCDebug(lcLyrics) << "using deferred local lyric for" << m_track.title;
+        applyFoundLyric(m_localFallbackOrigin, m_localFallbackTranslation);
         return;
     }
 
-    setState(State::Loading);
-    startSearch();
+    if (m_lastError.isEmpty()) {
+        setState(State::NotFound);
+    } else {
+        setState(State::Error);
+    }
+    updateCurrent(true);
 }
 
-void LyricEngine::startSearch()
+bool LyricEngine::tryLocalStep()
 {
-    m_searchesPending = m_providers.size();
+    if (!m_localSource) {
+        return false;
+    }
+    const std::optional<QString> localPath = localPathFromSongId(m_track.uniqueSongId);
+    if (!localPath) {
+        return false;
+    }
+
+    const std::optional<LyricStore> store = m_localSource->load(*localPath);
+    if (!store || !store->hasAny()) {
+        return false;
+    }
+
+    const Lyric origin = parseLrc(store->lyric);
+    if (origin.isEmpty() || isPlaceholderLyric(origin)) {
+        return false;
+    }
+
+    const Lyric translation = store->tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(store->tlyric));
+
+    // A local lyric that cannot be synced to playback must not stop the walk: it
+    // would shadow a timed lyric from a provider. Keep it as a fallback for the
+    // case where nothing else yields content, though.
+    if (origin.kind != LyricKind::Timed) {
+        qCDebug(lcLyrics) << "deferring untimed local lyric for" << m_track.title;
+        m_localFallbackOrigin = origin;
+        m_localFallbackTranslation = translation;
+        m_localFallbackSet = true;
+        return false;
+    }
+
+    // Deliberately not cached: editing the .lrc must take effect on the next play.
+    applyFoundLyric(origin, translation);
+    return true;
+}
+
+bool LyricEngine::tryCacheStep()
+{
+    const std::optional<CacheEntry> cached = LyricCache::lookup(m_track);
+    if (!cached) {
+        return false;
+    }
+    const Lyric origin = parseLrc(cached->store.lyric);
+    const Lyric translation = pairTranslation(origin, parseLrc(cached->store.tlyric));
+    if (origin.isEmpty() || isPlaceholderLyric(origin)) {
+        return false;
+    }
+
+    m_offset = cached->offsetMs;
+    applyFoundLyric(origin, translation);
+    qCDebug(lcLyrics) << "cache hit for" << m_track.title;
+    return true;
+}
+
+void LyricEngine::startProviderSearches()
+{
+    m_searchesStarted = true;
+    setState(State::Loading);
+
     for (int i = 0; i < m_providers.size(); ++i) {
         LyricProvider *provider = m_providers.at(i);
         if (!provider) {
-            --m_searchesPending;
             continue;
         }
+        // Only providers that appear in the order are searched at all.
+        const bool listed = std::any_of(m_steps.cbegin(), m_steps.cend(), [i](const Step &step) {
+            return step.kind == Step::Provider && step.providerIndex == i;
+        });
+        if (!listed) {
+            continue;
+        }
+
         const quint64 requestId = m_nextRequestId++;
         m_pendingSearches.insert(requestId, {m_generation, i});
         provider->searchSong(requestId, m_track, kSearchLimit);
     }
-    if (m_searchesPending <= 0) {
-        finishSearchPhase();
+}
+
+bool LyricEngine::tryNextCandidate(int providerIndex)
+{
+    if (providerIndex < 0 || providerIndex >= m_providers.size()) {
+        return false;
     }
+    LyricProvider *provider = m_providers.at(providerIndex);
+    if (!provider) {
+        return false;
+    }
+
+    const QList<RankedSong> candidates = m_candidatesByProvider.value(providerIndex);
+    if (m_candidateIndex >= candidates.size()) {
+        return false;
+    }
+
+    const RankedSong candidate = candidates.at(m_candidateIndex);
+    const quint64 requestId = m_nextRequestId++;
+    m_pendingLyrics.insert(requestId, {m_generation, candidate.song.id, providerIndex});
+    m_queryPending = true;
+    provider->queryLyric(requestId, candidate.song.id);
+    return true;
 }
 
 void LyricEngine::onSearchFinished(quint64 requestId, const QList<kshadowlrc::SongInfo> &results)
@@ -165,12 +395,11 @@ void LyricEngine::onSearchFinished(quint64 requestId, const QList<kshadowlrc::So
     m_pendingSearches.erase(it);
 
     if (!results.isEmpty() && providerIndex >= 0 && providerIndex < m_providers.size()) {
-        m_candidates.append(rankCandidates(m_track, results, providerIndex));
+        m_candidatesByProvider.insert(providerIndex, rankCandidates(m_track, results, providerIndex));
     }
+    m_searchesAnswered.insert(providerIndex);
 
-    if (--m_searchesPending <= 0) {
-        finishSearchPhase();
-    }
+    advanceWalk();
 }
 
 void LyricEngine::onSearchFailed(quint64 requestId, const QString &error)
@@ -179,52 +408,15 @@ void LyricEngine::onSearchFailed(quint64 requestId, const QString &error)
     if (it == m_pendingSearches.end() || it->generation != m_generation) {
         return;
     }
-    qCDebug(lcLyrics) << "provider search failed:" << error;
+    const int providerIndex = it->providerIndex;
     m_pendingSearches.erase(it);
-    if (--m_searchesPending <= 0) {
-        finishSearchPhase();
-    }
-}
-
-void LyricEngine::finishSearchPhase()
-{
-    if (m_candidates.isEmpty()) {
-        setState(State::NotFound);
-        return;
+    qCDebug(lcLyrics) << "provider search failed:" << error;
+    m_searchesAnswered.insert(providerIndex);
+    if (!error.isEmpty()) {
+        recordFailure(error);
     }
 
-    std::stable_sort(m_candidates.begin(), m_candidates.end(), [](const RankedSong &a, const RankedSong &b) {
-        if (a.match.rank != b.match.rank) {
-            return a.match.rank < b.match.rank;
-        }
-        if (a.match.score != b.match.score) {
-            return a.match.score > b.match.score;
-        }
-        return a.providerIndex < b.providerIndex;
-    });
-
-    m_queryIndex = 0;
-    queryNextCandidate();
-}
-
-void LyricEngine::queryNextCandidate()
-{
-    if (m_queryIndex >= m_candidates.size()) {
-        setState(State::NotFound);
-        return;
-    }
-
-    const RankedSong candidate = m_candidates.at(m_queryIndex++);
-    LyricProvider *provider =
-        (candidate.providerIndex >= 0 && candidate.providerIndex < m_providers.size()) ? m_providers.at(candidate.providerIndex) : nullptr;
-    if (!provider) {
-        queryNextCandidate();
-        return;
-    }
-
-    const quint64 requestId = m_nextRequestId++;
-    m_pendingLyrics.insert(requestId, {m_generation, candidate.song.id});
-    provider->queryLyric(requestId, candidate.song.id);
+    advanceWalk();
 }
 
 void LyricEngine::onLyricFinished(quint64 requestId, const QString &songId, const kshadowlrc::LyricStore &store)
@@ -235,24 +427,22 @@ void LyricEngine::onLyricFinished(quint64 requestId, const QString &songId, cons
         return;
     }
     m_pendingLyrics.erase(it);
+    m_queryPending = false;
+    ++m_candidateIndex;
 
-    if (!store.hasAny()) {
-        queryNextCandidate();
-        return;
+    if (store.hasAny()) {
+        const Lyric origin = parseLrc(store.lyric);
+        if (!origin.isEmpty() && !isPlaceholderLyric(origin)) {
+            const Lyric translation = store.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(store.tlyric));
+            // A fresh provider fetch is cached with offset 0 (the user's own offset is theirs).
+            LyricCache::store(m_track, store, 0);
+            applyFoundLyric(origin, translation);
+            advanceWalk();
+            return;
+        }
     }
 
-    const Lyric origin = parseLrc(store.lyric);
-    if (origin.isEmpty() || isPlaceholderLyric(origin)) {
-        queryNextCandidate();
-        return;
-    }
-
-    const Lyric translation = store.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(store.tlyric));
-
-    // A fresh fetch is cached with offset 0 (the user's own offset is theirs).
-    LyricCache::store(m_track, store, 0);
-
-    applyFoundLyric(origin, translation);
+    advanceWalk();
 }
 
 void LyricEngine::onLyricFailed(quint64 requestId, const QString &songId, const QString &error)
@@ -264,13 +454,22 @@ void LyricEngine::onLyricFailed(quint64 requestId, const QString &songId, const 
     }
     qCDebug(lcLyrics) << "provider lyric fetch failed:" << error;
     m_pendingLyrics.erase(it);
-    queryNextCandidate();
+    m_queryPending = false;
+    ++m_candidateIndex;
+    if (!error.isEmpty()) {
+        recordFailure(error);
+    }
+
+    advanceWalk();
 }
 
 void LyricEngine::applyFoundLyric(const Lyric &origin, const Lyric &translation)
 {
     m_origin = origin;
     m_translation = translation;
+    m_walkDone = true;
+    m_queryPending = false;
+    setLastError(QString()); // a resolution that succeeds is not a failure
     setState(State::Found);
     Q_EMIT lyricChanged();
     Q_EMIT lyricsChanged(m_origin, m_translation);
@@ -282,8 +481,12 @@ void LyricEngine::setLyric(const Lyric &origin, const Lyric &translation, const 
     ++m_generation; // cancel anything in flight
     m_pendingSearches.clear();
     m_pendingLyrics.clear();
-    m_candidates.clear();
-    m_searchesPending = 0;
+    m_walkDone = true;
+    m_queryPending = false;
+    m_localFallbackOrigin.clear();
+    m_localFallbackTranslation.clear();
+    m_localFallbackSet = false;
+    setLastError(QString());
     if (track.isValid()) {
         m_track = track;
         m_hasProcessedTrack = true;
@@ -302,10 +505,20 @@ void LyricEngine::clear()
     ++m_generation;
     m_pendingSearches.clear();
     m_pendingLyrics.clear();
-    m_candidates.clear();
-    m_searchesPending = 0;
-    m_queryIndex = 0;
+    m_steps.clear();
+    m_stepIndex = 0;
+    m_currentProviderIndex = -1;
+    m_candidateIndex = 0;
+    m_searchesStarted = false;
+    m_queryPending = false;
+    m_walkDone = true;
+    m_candidatesByProvider.clear();
+    m_searchesAnswered.clear();
+    m_localFallbackOrigin.clear();
+    m_localFallbackTranslation.clear();
+    m_localFallbackSet = false;
     m_offset = 0;
+    setLastError(QString());
     // Forget the track as well as its lyrics. The processed-track guard exists so
     // a repeated setTrack() for the song already loaded does not restart the
     // search; leaving it set here would swallow the next setTrack() for that same
@@ -450,6 +663,23 @@ void LyricEngine::setState(State state)
     }
     m_state = state;
     Q_EMIT stateChanged(m_state);
+}
+
+void LyricEngine::recordFailure(const QString &error)
+{
+    if (m_lastError.isEmpty()) {
+        qCWarning(lcLyrics) << "lyric resolution failure:" << error;
+        setLastError(error);
+    }
+}
+
+void LyricEngine::setLastError(const QString &error)
+{
+    if (m_lastError == error) {
+        return;
+    }
+    m_lastError = error;
+    Q_EMIT lastErrorChanged(m_lastError);
 }
 
 void LyricEngine::updateCurrent(bool force)

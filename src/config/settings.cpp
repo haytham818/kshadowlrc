@@ -35,6 +35,7 @@ void persistChangesOn(KShadowLrcSettings *settings)
     QObject::connect(settings, &KShadowLrcSettings::syncIntervalMsChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::neteaseEnabledChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::lrclibEnabledChanged, settings, &KConfigSkeleton::save);
+    QObject::connect(settings, &KShadowLrcSettings::sourceOrderChanged, settings, &KConfigSkeleton::save);
 }
 
 } // namespace

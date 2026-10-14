@@ -9,11 +9,14 @@
 #include <QHash>
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
 namespace kshadowlrc
 {
+
+class LocalSource;
 
 /*! Which side of a timed lyric the UI shows prominently. */
 enum class LyricDisplayMode {
@@ -23,10 +26,14 @@ enum class LyricDisplayMode {
 };
 
 /*!
- * Owns the lyric pipeline: cache, provider search, ranking, parsing and
- * translation pairing. It knows nothing about MPRIS or any concrete provider.
+ * Owns the lyric pipeline: an ordered walk over the enabled sources, the cache,
+ * provider search, ranking, parsing and translation pairing. It knows nothing
+ * about MPRIS or any concrete provider.
  *
  * Providers are injected with setProviders() and used on the main thread only.
+ * The order they are tried in is the logical source order set with
+ * setSourceOrder(); provider candidates are ranked by that order and, within
+ * one provider, by rank/score as before.
  * \ref setTrack starts a fetch; every async answer is tagged with a request id
  * so a late reply for a previous track is dropped.
  */
@@ -46,7 +53,7 @@ public:
 
     explicit LyricEngine(QObject *parent = nullptr);
 
-    /*! Providers are borrowed, never owned. Order is not significant. */
+    /*! Providers are borrowed, never owned. */
     void setProviders(QList<LyricProvider *> providers);
     QList<LyricProvider *> providers() const
     {
@@ -54,9 +61,41 @@ public:
     }
 
     /*!
-     * Point the engine at a new track. A cache hit resolves immediately;
-     * otherwise every provider is searched concurrently, candidates are ranked
-     * and the best ones are queried in order until one yields content.
+     * The local file source (sidecar or embedded tag), borrowed and never owned.
+     * May be null: with no local source a \c local step is a no-op, so the
+     * engine behaves correctly before the application wires one in.
+     */
+    void setLocalSource(LocalSource *source);
+    LocalSource *localSource() const
+    {
+        return m_localSource;
+    }
+
+    /*!
+     * Order in which logical lyric sources are tried. A recognised id is
+     * \c "local" or the name() of an installed provider (\c "netease",
+     * \c "lrclib"). Unknown ids are dropped; ids missing from \p order are
+     * appended in the default order (\c netease, \c lrclib, \c local), and an
+     * empty list restores that default outright.
+     */
+    void setSourceOrder(const QStringList &order);
+    QStringList sourceOrder() const
+    {
+        return m_sourceOrder;
+    }
+
+    /*! First failure string of the current resolution, empty when there was none. */
+    QString lastError() const
+    {
+        return m_lastError;
+    }
+
+    /*!
+     * Point the engine at a new track. A timed local lyric, a cache hit before
+     * the first provider or a provider lyric resolves it; a plain (untimed)
+     * local lyric is held back as a last-resort fallback and used only when no
+     * source yields content. The walk stops at the first winner and never
+     * consults a later source.
      */
     void setTrack(const TrackMeta &track);
     const TrackMeta &track() const
@@ -136,26 +175,58 @@ Q_SIGNALS:
     void currentLineChanged(const QString &text, const QString &translation);
     void currentIndexChanged(int index);
     void stateChanged(kshadowlrc::LyricEngine::State state);
+    /*! The first failure string of a resolution changed (set, or cleared). */
+    void lastErrorChanged(const QString &error);
     /*! The parsed lyrics were replaced (found, cleared or injected). */
     void lyricChanged();
     /*! The parsed lyrics themselves, for a windowed UI to render. */
     void lyricsChanged(const kshadowlrc::Lyric &origin, const kshadowlrc::Lyric &translation);
 
 private:
+    /*! One entry of the resolved source order. */
+    struct Step {
+        enum Kind {
+            Local, //!< the local file source
+            Provider, //!< m_providers[providerIndex]
+        };
+        Kind kind = Local;
+        int providerIndex = -1;
+    };
+
     void onSearchFinished(quint64 requestId, const QList<kshadowlrc::SongInfo> &results);
     void onSearchFailed(quint64 requestId, const QString &error);
     void onLyricFinished(quint64 requestId, const QString &songId, const kshadowlrc::LyricStore &store);
     void onLyricFailed(quint64 requestId, const QString &songId, const QString &error);
 
-    void startSearch();
-    void finishSearchPhase();
-    void queryNextCandidate();
+    /*! The configured order with unknown ids dropped and missing ones appended. */
+    QStringList effectiveOrder() const;
+    /*! The effective order mapped to concrete steps, resolved against m_providers. */
+    QList<Step> resolveSteps() const;
+
+    /*! Walk the source order until a winner is found or the walk must wait. */
+    void advanceWalk();
+    void finishWalk();
+    /*! Try the local step; true when it produced a winner. */
+    bool tryLocalStep();
+    /*! Try the cache, which is only consulted just before the first provider step. */
+    bool tryCacheStep();
+    /*! Search every listed provider concurrently, once, when the walk reaches a provider. */
+    void startProviderSearches();
+    /*! Query \p providerIndex's next ranked candidate; false when it has none left. */
+    bool tryNextCandidate(int providerIndex);
+
     void applyFoundLyric(const Lyric &origin, const Lyric &translation);
     void setState(State state);
+    /*! Record the first failure of this resolution and log it at warning level. */
+    void recordFailure(const QString &error);
+    void setLastError(const QString &error);
     void updateCurrent(bool force);
 
     TrackMeta m_track;
     QList<LyricProvider *> m_providers;
+    LocalSource *m_localSource = nullptr;
+    QStringList m_sourceOrder;
+    QString m_lastError;
     Lyric m_origin;
     Lyric m_translation;
     State m_state = State::Idle;
@@ -178,13 +249,29 @@ private:
     struct PendingLyric {
         quint64 generation = 0;
         QString songId;
+        int providerIndex = -1;
     };
     QHash<quint64, PendingSearch> m_pendingSearches;
     QHash<quint64, PendingLyric> m_pendingLyrics;
 
-    QList<RankedSong> m_candidates;
-    int m_searchesPending = 0;
-    int m_queryIndex = 0;
+    // The walk's state. m_steps is rebuilt per track; the rest is reset with it.
+    QList<Step> m_steps;
+    int m_stepIndex = 0;
+    int m_currentProviderIndex = -1;
+    int m_candidateIndex = 0;
+    bool m_searchesStarted = false;
+    bool m_queryPending = false;
+    bool m_walkDone = false;
+    bool m_walking = false;
+    QHash<int, QList<RankedSong>> m_candidatesByProvider;
+    QSet<int> m_searchesAnswered;
+
+    // A non-placeholder local lyric that could not be synced (LyricKind other
+    // than Timed), held as the last resort: the walk shows it only when no
+    // source produced a timed lyric. Reset with the rest of the per-track state.
+    Lyric m_localFallbackOrigin;
+    Lyric m_localFallbackTranslation;
+    bool m_localFallbackSet = false;
 };
 
 } // namespace kshadowlrc

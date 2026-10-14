@@ -6,6 +6,7 @@
 #include "config/settings.h"
 #include "kshadowlrc.h"
 #include "lyrics/lrcparser.h"
+#include "lyrics/lyricstatus.h"
 #include "lyrics/providers/lrclib.h"
 #include "lyrics/providers/netease.h"
 #include "player/playertracker.h"
@@ -58,8 +59,11 @@ LyricsController::LyricsController(QObject *parent)
 {
     m_netease = new NeteaseProvider(this);
     m_lrclib = new LRCLibProvider(this);
-    // Order is not significant: the engine ranks candidates across providers.
+    // The order they are handed over in is not significant: setSourceOrder() and
+    // the settings decide which is tried first.
     m_engine.setProviders({m_netease, m_lrclib});
+    // The file's own lyric, tried wherever the settings put "local" in the order.
+    m_engine.setLocalSource(&m_localFiles);
     // The overlay shows a primary line plus a translation; keep both by default.
     m_engine.setDisplayMode(LyricDisplayMode::Both);
 
@@ -72,6 +76,12 @@ LyricsController::LyricsController(QObject *parent)
     connect(&m_engine, &LyricEngine::stateChanged, this, [this](LyricEngine::State state) {
         qCDebug(lcLyrics) << "engine state:" << static_cast<int>(state);
         Q_EMIT stateChanged();
+        Q_EMIT lyricStatusChanged();
+    });
+    connect(&m_engine, &LyricEngine::lastErrorChanged, this, [this](const QString &error) {
+        qCDebug(lcLyrics) << "engine last error:" << (error.isEmpty() ? QStringLiteral("<none>") : error);
+        Q_EMIT lastErrorChanged();
+        Q_EMIT lyricStatusChanged();
     });
 
     m_demoTimer.setInterval(kDemoIntervalMs);
@@ -154,6 +164,20 @@ int LyricsController::state() const
     return static_cast<int>(m_engine.state());
 }
 
+QString LyricsController::lastError() const
+{
+    return m_engine.lastError();
+}
+
+QString LyricsController::lyricStatus() const
+{
+    // The sentence for the state, on its own. The settings window shows the
+    // failure diagnostic as a separate, quieter line -- tray tool tips cannot
+    // style anything, which is why the tool tip composes the two together
+    // through lyricstatus::statusText() instead.
+    return lyricstatus::stateText(state());
+}
+
 int LyricsController::displayMode() const
 {
     switch (m_engine.displayMode()) {
@@ -191,6 +215,7 @@ void LyricsController::setSettings(KShadowLrcSettings *settings)
     connect(m_settings, &KShadowLrcSettings::visibleLinesChanged, this, &LyricsController::updateUpcoming);
     connect(m_settings, &KShadowLrcSettings::neteaseEnabledChanged, this, &LyricsController::applyProviders);
     connect(m_settings, &KShadowLrcSettings::lrclibEnabledChanged, this, &LyricsController::applyProviders);
+    connect(m_settings, &KShadowLrcSettings::sourceOrderChanged, this, &LyricsController::applyProviders);
     connect(m_settings, &KShadowLrcSettings::lyricOffsetMsChanged, this, &LyricsController::applyConfiguredOffset);
 
     setDisplayMode(m_settings->displayMode());
@@ -208,13 +233,15 @@ void LyricsController::applyProviders()
         providers.append(m_lrclib);
     }
     m_engine.setProviders(providers);
+    m_engine.setSourceOrder(m_settings ? m_settings->sourceOrder() : QStringList{});
 
     QStringList names;
     names.reserve(providers.size());
     for (const LyricProvider *provider : providers) {
         names.append(provider->name());
     }
-    qCDebug(lcLyrics) << "providers enabled:" << (names.isEmpty() ? QStringLiteral("<none>") : names.join(QStringLiteral(", ")));
+    qCDebug(lcLyrics) << "providers enabled:" << (names.isEmpty() ? QStringLiteral("<none>") : names.join(QStringLiteral(", ")))
+                      << "order:" << m_engine.sourceOrder();
 
     reloadCurrentTrack();
 }
@@ -227,7 +254,7 @@ void LyricsController::reloadCurrentTrack()
     if (!track.isValid()) {
         return;
     }
-    qCDebug(lcLyrics) << "re-fetching" << track.title << "after a provider change";
+    qCDebug(lcLyrics) << "re-fetching" << track.title << "after a provider/order change";
     m_engine.clear();
     m_engine.setTrack(track);
 }
@@ -431,6 +458,7 @@ void LyricsController::updateDisplay()
     Q_EMIT currentTextChanged();
     Q_EMIT translationTextChanged();
     Q_EMIT stateChanged();
+    Q_EMIT lyricStatusChanged();
     updateUpcoming();
 }
 

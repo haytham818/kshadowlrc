@@ -120,7 +120,9 @@ void LyricEngineTest::initTestCase()
 
 void LyricEngineTest::invalidTrack()
 {
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     LyricEngine engine;
     engine.setProviders({&provider});
     engine.setTrack(TrackMeta{});
@@ -134,7 +136,9 @@ void LyricEngineTest::foundWithTranslation()
     const TrackMeta track = makeTrack(QStringLiteral("Engine Found Song"));
     clearCache(track);
 
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     provider.searchResults = {makeCandidate(QStringLiteral("42"), track.title)};
     provider.lyricStore.lyric = QStringLiteral("[00:01.00]Hello\n[00:02.00]World");
     provider.lyricStore.tlyric = QStringLiteral("[00:01.00]你好\n[00:02.00]世界");
@@ -188,7 +192,9 @@ void LyricEngineTest::placeholderFiltered()
     const TrackMeta track = makeTrack(QStringLiteral("Engine Placeholder Song"));
     clearCache(track);
 
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     provider.searchResults = {makeCandidate(QStringLiteral("7"), track.title)};
     provider.lyricStore.lyric = QStringLiteral("[00:00.00]暂无歌词");
 
@@ -207,7 +213,9 @@ void LyricEngineTest::staleResultIgnored()
     clearCache(first);
     clearCache(second);
 
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     provider.autoDeliver = false;
     provider.searchResults = {makeCandidate(QStringLiteral("1"), first.title)};
     provider.lyricStore.lyric = QStringLiteral("[00:01.00]stale");
@@ -245,7 +253,9 @@ void LyricEngineTest::noResults()
     const TrackMeta track = makeTrack(QStringLiteral("Engine Empty Song"));
     clearCache(track);
 
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     provider.searchResults.clear();
 
     LyricEngine engine;
@@ -259,7 +269,9 @@ void LyricEngineTest::clearForgetsTheTrack()
     const TrackMeta track = makeTrack(QStringLiteral("Engine Clear Song"));
     clearCache(track);
 
-    FakeProvider provider(QStringLiteral("fake"));
+    // "netease" is a source the engine knows by name; an arbitrary id would be
+    // dropped by the source order now that it is user-configurable.
+    FakeProvider provider(QStringLiteral("netease"));
     provider.searchResults = {makeCandidate(QStringLiteral("77"), track.title)};
     provider.lyricStore.lyric = QStringLiteral("[00:01.00]Only line");
 

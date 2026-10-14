@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include "lyrics/localsource.h"
 #include "lyrics/lyricengine.h"
 #include "lyrics/provider.h"
 
@@ -25,14 +26,16 @@ enum class PlaybackStatus;
 /*!
  * QML bridge between the lyric engine and the overlay.
  *
- * It owns both lyric providers (LRCLib and NetEase; the engine ranks them, so
- * the order they are handed over in does not matter) and a fast clock that
- * pushes PlayerTracker::elapsedMs() into the engine.
+ * It owns both lyric providers (LRCLib and NetEase) and a fast clock that
+ * pushes PlayerTracker::elapsedMs() into the engine. The order they are tried
+ * in is the settings' sourceOrder, pushed into the engine; the order they are
+ * handed over in does not matter.
  *
  * Both a PlayerTracker and a KShadowLrcSettings are optional: without them the
  * controller still drives the built-in demo (\ref setTestMode). Injected, the
- * settings govern the display mode, the enabled providers, the number of
- * upcoming lines and the lyric offset; the tracker supplies the playhead.
+ * settings govern the display mode, the enabled providers, the source order,
+ * the number of upcoming lines and the lyric offset; the tracker supplies the
+ * playhead.
  *
  * QML binds to \c currentText / \c translationText (the current line and its
  * translation) and \c upcomingLines (the following lines, dimmed).
@@ -44,6 +47,8 @@ class LyricsController : public QObject
     Q_PROPERTY(QString translationText READ translationText NOTIFY translationTextChanged)
     Q_PROPERTY(QStringList upcomingLines READ upcomingLines NOTIFY upcomingLinesChanged)
     Q_PROPERTY(int state READ state NOTIFY stateChanged)
+    Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    Q_PROPERTY(QString lyricStatus READ lyricStatus NOTIFY lyricStatusChanged)
     Q_PROPERTY(int displayMode READ displayMode WRITE setDisplayMode NOTIFY displayModeChanged)
     Q_PROPERTY(qint64 lyricOffset READ lyricOffset WRITE setLyricOffset NOTIFY lyricOffsetChanged)
 
@@ -58,6 +63,15 @@ public:
 
     /*! 0 = idle, 1 = loading, 2 = found, 3 = not found, 4 = error. */
     int state() const;
+    /*! First transport/protocol failure string of the current resolution, or empty. */
+    QString lastError() const;
+    /*!
+     * The sentence for state() alone: what the lyrics are doing, in words. The
+     * settings window shows it and puts lastError() under it as a separate,
+     * quieter line. It comes from src/lyrics/lyricstatus.h, the one home for the
+     * wording, which the tray tool tip also goes through.
+     */
+    QString lyricStatus() const;
 
     int displayMode() const;
     qint64 lyricOffset() const;
@@ -100,6 +114,8 @@ Q_SIGNALS:
     void translationTextChanged();
     void upcomingLinesChanged();
     void stateChanged();
+    void lastErrorChanged();
+    void lyricStatusChanged();
     void displayModeChanged();
     void lyricOffsetChanged();
 
@@ -137,6 +153,10 @@ private:
     void stopClock();
 
     LyricEngine m_engine;
+    // Reads the sidecar or the embedded tag of the playing file. It lives here
+    // because the engine only borrows its source, and because a caller that
+    // wants a different one (a test) can hand the engine a stub instead.
+    LocalFiles m_localFiles;
     NeteaseProvider *m_netease = nullptr;
     LRCLibProvider *m_lrclib = nullptr;
     PlayerTracker *m_tracker = nullptr;

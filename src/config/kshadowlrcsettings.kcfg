@@ -112,5 +112,10 @@
       <label>Look up lyrics through the LRCLib provider</label>
       <default>true</default>
     </entry>
+
+    <entry name="sourceOrder" type="StringList">
+      <label>Order in which lyric sources are tried: "local" for a sidecar or embedded tag, otherwise a provider name such as "netease" or "lrclib". Unknown entries are ignored and missing sources are appended in the default order.</label>
+      <default>netease,lrclib,local</default>
+    </entry>
   </group>
 </kcfg>
