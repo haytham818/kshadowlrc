@@ -40,6 +40,11 @@ file(GLOB_RECURSE KSHADOWLRC_CONFIG_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/config/*.h"
 )
+# The desktop-integration surface: the tray icon and the global shortcuts.
+file(GLOB_RECURSE KSHADOWLRC_SYSTEM_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/system/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/system/*.h"
+)
 
 add_library(kshadowlrc_lib STATIC
     kshadowlrc.h
@@ -48,6 +53,7 @@ add_library(kshadowlrc_lib STATIC
     ${KSHADOWLRC_LYRICS_SOURCES}
     ${KSHADOWLRC_PLAYER_SOURCES}
     ${KSHADOWLRC_CONFIG_SOURCES}
+    ${KSHADOWLRC_SYSTEM_SOURCES}
     ${KSHADOWLRC_KCFG_SRCS}
     ${KSHADOWLRC_QML_RESOURCES}
 )
@@ -66,6 +72,8 @@ target_link_libraries(kshadowlrc_lib PUBLIC
     KF6::ConfigGui
     KF6::WindowSystem
     KF6::Kirigami
+    KF6::GlobalAccel
+    KF6::StatusNotifierItem
     LayerShellQt::Interface
 )
 # qpa/qplatformnativeinterface.h (raw wl_surface access for the input region).

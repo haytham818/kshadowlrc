@@ -48,6 +48,12 @@ find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS
     # linking it is what makes the org.kde.kirigami QML module resolvable at
     # runtime instead of merely installed on the developer's machine.
     Kirigami
+    # The system tray icon and the global shortcuts that adjust the lyric
+    # offset from anywhere. Both are required: without them the overlay has no
+    # way to be configured or nudged once it is running, and there is no
+    # sensible degraded mode to fall back to.
+    GlobalAccel
+    StatusNotifierItem
 )
 
 # Optional: KDBusService backs the single-instance guard. Its devel package is
