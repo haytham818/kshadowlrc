@@ -3,6 +3,13 @@
 
 qt_add_resources(KSHADOWLRC_QML_RESOURCES qml/qml.qrc)
 
+# The application icon, compiled in as well as installed. The installed copy is
+# only found by QIcon::fromTheme() once the application has been installed, and
+# the tray icon has to look right when running from the build tree too.
+# Q_INIT_RESOURCE(icons) is called from src/app/application.cpp: resources in a
+# static library are not registered unless something references them.
+qt_add_resources(KSHADOWLRC_ICON_RESOURCES icons.qrc)
+
 # Typed settings. kconfig_compiler turns config/kshadowlrcsettings.kcfg into
 # kshadowlrcsettings.{h,cpp} in the build tree, declaring
 # kshadowlrc::KShadowLrcSettings. GENERATE_MOC lets AUTOMOC see the generated
@@ -56,6 +63,7 @@ add_library(kshadowlrc_lib STATIC
     ${KSHADOWLRC_SYSTEM_SOURCES}
     ${KSHADOWLRC_KCFG_SRCS}
     ${KSHADOWLRC_QML_RESOURCES}
+    ${KSHADOWLRC_ICON_RESOURCES}
 )
 
 target_link_libraries(kshadowlrc_lib PUBLIC

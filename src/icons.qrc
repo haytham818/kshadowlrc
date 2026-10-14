@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>io.github.haytham818.kshadowlrc.svg</file>
+    </qresource>
+</RCC>
