@@ -40,6 +40,7 @@ private Q_SLOTS:
     void defaultsAndFirstWrite();
     void roundTrip();
     void explicitFileOverload();
+    void ignoredPlayersRoundTripsThroughDisk();
 
 private:
     QString m_configDir;
@@ -137,6 +138,26 @@ void SettingsTest::explicitFileOverload()
     auto reparsed = KSharedConfig::openConfig(otherPath, KConfig::SimpleConfig);
     std::unique_ptr<kshadowlrc::KShadowLrcSettings> roundTripped(kshadowlrc::createSettings(reparsed));
     QVERIFY2(qFuzzyCompare(roundTripped->verticalPosition(), 7.0), "the replacement file round-trips");
+}
+
+void SettingsTest::ignoredPlayersRoundTripsThroughDisk()
+{
+    // 4. The ignore list is a StringList written by persistChangesOn(); without
+    //    its ignoredPlayersChanged connection the edit would never reach disk
+    //    and the reload below would read back the default.
+    const QStringList edited = {QStringLiteral("org.mpris.MediaPlayer2.vlc"), QStringLiteral("firefox"), QStringLiteral("org.mpris.MediaPlayer2.*")};
+
+    std::unique_ptr<kshadowlrc::KShadowLrcSettings> settings(kshadowlrc::createSettings());
+    QVERIFY2(settings->ignoredPlayers() == QStringList({QStringLiteral("org.mpris.MediaPlayer2.firefox"), QStringLiteral("org.mpris.MediaPlayer2.playerctld")}),
+             "the ignore list starts at its two built-in defaults");
+
+    settings->setIgnoredPlayers(edited);
+
+    // A brand new object reparsing the same file must see the edit, elements and
+    // order intact.
+    KSharedConfig::openConfig(QStringLiteral("kshadowlrcrc"))->reparseConfiguration();
+    std::unique_ptr<kshadowlrc::KShadowLrcSettings> reloaded(kshadowlrc::createSettings());
+    QVERIFY2(reloaded->ignoredPlayers() == edited, "the edited ignore list round-trips through disk in order");
 }
 
 int main(int argc, char **argv)

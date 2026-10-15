@@ -52,6 +52,14 @@ public:
      */
     int run(const KAboutData &aboutData, const QString &outputName = QString(), bool demo = false, bool openSettings = false);
 
+    /*!
+     * Make \p tracker skip the players named in \p settings' ignoredPlayers list,
+     * now and after every later edit. Kept as its own function so the
+     * settings-wiring test can drive the wiring without standing up a whole
+     * Application (which needs a session bus, the overlay and a tray icon).
+     */
+    static void applyIgnoredPlayers(KShadowLrcSettings *settings, PlayerTracker *tracker);
+
 private:
     /*! Apply the overlay-owned settings and follow them at runtime. */
     void applyOverlaySettings(const QString &commandLineOutput);

@@ -7,6 +7,7 @@
 //   - disabling a provider is respected by the engine;
 //   - the lyric offset round-trips between tracker and settings without
 //     oscillating (each direction emits exactly once per change);
+//   - the ignore list reaches the tracker through Application's wiring;
 //   - the placement point is two doubles whose changed signals fire once per
 //     real change.
 //
@@ -14,6 +15,7 @@
 // is opened, so the developer's real kshadowlrcrc is never touched. No network,
 // no GUI.
 
+#include "app/application.h"
 #include "config/settings.h"
 #include "lyrics/controller.h"
 #include "lyrics/lyricengine.h"
@@ -59,6 +61,7 @@ private Q_SLOTS:
     void placementChangesAreAnnounced();
     void offsetRoundTripsExactlyOnce();
     void rewritingTheSameOffsetEmitsNothing();
+    void ignoredPlayersReachTheTracker();
 
 private:
     std::unique_ptr<KShadowLrcSettings> m_settings;
@@ -184,6 +187,23 @@ void SettingsWiringTest::rewritingTheSameOffsetEmitsNothing()
     QCoreApplication::processEvents();
     QVERIFY(m_trackerOffsetEmits == 2);
     QVERIFY(m_settingsOffsetEmits == 2);
+}
+
+void SettingsWiringTest::ignoredPlayersReachTheTracker()
+{
+    // The production wiring is Application::applyIgnoredPlayers(); drive it
+    // directly rather than standing up a whole Application, which needs a
+    // session bus, the layer-shell overlay and a tray icon.
+    //
+    // A value distinct from the tracker's compiled-in default, so the initial
+    // send is observable rather than coincidentally equal.
+    m_settings->setIgnoredPlayers({QStringLiteral("org.mpris.MediaPlayer2.vlc")});
+    Application::applyIgnoredPlayers(m_settings.get(), &m_tracker);
+    QCOMPARE(m_tracker.ignoredPlayers(), QStringList{QStringLiteral("org.mpris.MediaPlayer2.vlc")});
+
+    // Later edits follow, elements and order intact.
+    m_settings->setIgnoredPlayers({QStringLiteral("spotify"), QStringLiteral("org.mpris.MediaPlayer2.firefox")});
+    QCOMPARE(m_tracker.ignoredPlayers(), QStringList({QStringLiteral("spotify"), QStringLiteral("org.mpris.MediaPlayer2.firefox")}));
 }
 
 int main(int argc, char **argv)

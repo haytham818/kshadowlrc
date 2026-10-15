@@ -141,12 +141,27 @@ void Application::applyOverlaySettings(const QString &commandLineOutput)
                   << (m_outputNameFromCommandLine ? "(from command line)" : "(from settings)");
 }
 
+void Application::applyIgnoredPlayers(KShadowLrcSettings *settings, PlayerTracker *tracker)
+{
+    tracker->setIgnoredPlayers(settings->ignoredPlayers());
+    // Follow later edits: whoever changes the list (the settings window today)
+    // only touches the setting, and the tracker picks it up from here.
+    connect(settings, &KShadowLrcSettings::ignoredPlayersChanged, tracker, [settings, tracker] {
+        tracker->setIgnoredPlayers(settings->ignoredPlayers());
+    });
+}
+
 void Application::applyPlaybackSettings()
 {
     m_playerTracker->setSyncIntervalMs(m_settings->syncIntervalMs());
     connect(m_settings, &KShadowLrcSettings::syncIntervalMsChanged, this, [this] {
         m_playerTracker->setSyncIntervalMs(m_settings->syncIntervalMs());
         qCInfo(lcApp) << "settings changed: syncIntervalMs ->" << m_settings->syncIntervalMs();
+    });
+
+    applyIgnoredPlayers(m_settings, m_playerTracker.get());
+    connect(m_settings, &KShadowLrcSettings::ignoredPlayersChanged, this, [this] {
+        qCInfo(lcApp) << "settings changed: ignoredPlayers ->" << m_settings->ignoredPlayers();
     });
 
     qCInfo(lcApp) << "playback: syncIntervalMs=" << m_settings->syncIntervalMs() << "lyricOffsetMs=" << m_settings->lyricOffsetMs()
@@ -230,6 +245,9 @@ void Application::openSettingsWindow()
         // The output picker can only show what is connected, so it reads the live
         // output list. Parented to the application, so it outlives the engine.
         m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("outputs"), new Outputs(this));
+        // The ignored-players list shows what is running, so it reads the tracker
+        // directly (knownPlayers()) and asks it to re-scan on open.
+        m_settingsEngine->rootContext()->setContextProperty(QStringLiteral("playerTracker"), m_playerTracker.get());
 
         connect(m_settingsEngine.get(), &QQmlApplicationEngine::warnings, this, [](const QList<QQmlError> &warnings) {
             for (const QQmlError &warning : warnings) {
