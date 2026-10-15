@@ -87,9 +87,10 @@ A local file's own lyrics come from two places, in this order:
   or Ogg file, an ID3v2 `USLT` frame in an MP3, the `©lyr` atom of an M4A, the
   `UNSYNCEDLYRICS` value of an APE file.
 
-A lyric with no timestamps in it is only used when nothing else has one for
-that song — it cannot follow the music. A tag that puts the original and its
-translation on the same line is shown the way it is written.
+A lyric with no timestamps in it is never shown: it cannot follow the music, so
+it counts as no lyric at all, and the song is reported as one the lyrics were
+not found for. A tag that puts the original and its translation on the same line
+is shown the way it is written.
 
 Where this source sits relative to the online ones is the `sourceOrder`
 setting; the values it accepts and its default are in
@@ -114,6 +115,8 @@ Pins live in `pins.json` under `QStandardPaths::AppDataLocation` — one per son
 in a file you can edit or delete by hand, and deliberately not in the cache,
 which is disposable. A song whose player reports no name and no length has
 nothing to pin a lyric to, and the window says so rather than failing quietly.
+An entry whose lyric carries no timestamps is refused when you pick it, for the
+same reason it would never be displayed: it cannot follow the music.
 
 ## Configuring
 
