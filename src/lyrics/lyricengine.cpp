@@ -139,16 +139,20 @@ void LyricEngine::setTrack(const TrackMeta &track)
 
     // A pin is the user's explicit choice, so it outranks the cache and every
     // source: apply it before either is consulted and start no search at all.
-    // Even an untimed pinned lyric is used as-is -- the local source's deferred
-    // fallback is a guess about quality, a pin is a decision.
+    // A pin that cannot follow music is not usable either -- the controller
+    // refuses one up front, but a hand-edited pins.json must not be able to make
+    // the engine call itself Found with a blank overlay.
     if (!m_pinnedKey.isEmpty() && m_pinnedStore.hasAny() && m_pinnedKey == pinstore::keyFor(track)) {
-        qCDebug(lcLyrics) << "using the pinned lyric for" << track.title;
         const Lyric origin = parseLrc(m_pinnedStore.lyric);
-        const Lyric translation = m_pinnedStore.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(m_pinnedStore.tlyric));
-        // Deliberately not cached: the pin is already the first priority, and a
-        // cached copy would only grow stale.
-        applyFoundLyric(origin, translation);
-        return;
+        if (canFollowMusic(origin)) {
+            qCDebug(lcLyrics) << "using the pinned lyric for" << track.title;
+            const Lyric translation = m_pinnedStore.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(m_pinnedStore.tlyric));
+            // Deliberately not cached: the pin is already the first priority, and
+            // a cached copy would only grow stale.
+            applyFoundLyric(origin, translation);
+            return;
+        }
+        qCDebug(lcLyrics) << "ignoring untimed pinned lyric for" << track.title;
     }
 
     m_steps = resolveSteps();
@@ -160,9 +164,6 @@ void LyricEngine::setTrack(const TrackMeta &track)
     m_walkDone = false;
     m_candidatesByProvider.clear();
     m_searchesAnswered.clear();
-    m_localFallbackOrigin.clear();
-    m_localFallbackTranslation.clear();
-    m_localFallbackSet = false;
 
     advanceWalk();
 }
@@ -309,14 +310,8 @@ void LyricEngine::finishWalk()
     m_walkDone = true;
     m_queryPending = false;
 
-    // Content wins over both NotFound and Error, exactly as a provider's plain
-    // lyric does: applyFoundLyric() clears any failure recorded on the way here.
-    if (m_localFallbackSet) {
-        qCDebug(lcLyrics) << "using deferred local lyric for" << m_track.title;
-        applyFoundLyric(m_localFallbackOrigin, m_localFallbackTranslation);
-        return;
-    }
-
+    // No usable lyric was found anywhere. A failure that happened on the way is
+    // reported; otherwise the providers simply answered with nothing usable.
     if (m_lastError.isEmpty()) {
         setState(State::NotFound);
     } else {
@@ -341,22 +336,17 @@ bool LyricEngine::tryLocalStep()
     }
 
     const Lyric origin = parseLrc(store->lyric);
-    if (origin.isEmpty() || isPlaceholderLyric(origin)) {
+    if (!canFollowMusic(origin)) {
+        // A lyric without timestamps cannot follow playback, so it counts as no
+        // lyric at all: the walk keeps looking rather than showing it.
+        qCDebug(lcLyrics) << "ignoring untimed local lyric for" << m_track.title;
+        return false;
+    }
+    if (isPlaceholderLyric(origin)) {
         return false;
     }
 
     const Lyric translation = store->tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(store->tlyric));
-
-    // A local lyric that cannot be synced to playback must not stop the walk: it
-    // would shadow a timed lyric from a provider. Keep it as a fallback for the
-    // case where nothing else yields content, though.
-    if (origin.kind != LyricKind::Timed) {
-        qCDebug(lcLyrics) << "deferring untimed local lyric for" << m_track.title;
-        m_localFallbackOrigin = origin;
-        m_localFallbackTranslation = translation;
-        m_localFallbackSet = true;
-        return false;
-    }
 
     // Deliberately not cached: editing the .lrc must take effect on the next play.
     applyFoundLyric(origin, translation);
@@ -370,10 +360,16 @@ bool LyricEngine::tryCacheStep()
         return false;
     }
     const Lyric origin = parseLrc(cached->store.lyric);
-    const Lyric translation = pairTranslation(origin, parseLrc(cached->store.tlyric));
-    if (origin.isEmpty() || isPlaceholderLyric(origin)) {
+    if (!canFollowMusic(origin)) {
+        // Same rule as every source: a cached lyric without timestamps is not
+        // usable, so it is skipped and the walk goes on to search.
+        qCDebug(lcLyrics) << "ignoring untimed cached lyric for" << m_track.title;
         return false;
     }
+    if (isPlaceholderLyric(origin)) {
+        return false;
+    }
+    const Lyric translation = pairTranslation(origin, parseLrc(cached->store.tlyric));
 
     m_offset = cached->offsetMs;
     applyFoundLyric(origin, translation);
@@ -475,7 +471,7 @@ void LyricEngine::onLyricFinished(quint64 requestId, const QString &songId, cons
 
     if (store.hasAny()) {
         const Lyric origin = parseLrc(store.lyric);
-        if (!origin.isEmpty() && !isPlaceholderLyric(origin)) {
+        if (canFollowMusic(origin) && !isPlaceholderLyric(origin)) {
             const Lyric translation = store.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(store.tlyric));
             // A fresh provider fetch is cached with offset 0 (the user's own offset is theirs).
             LyricCache::store(m_track, store, 0);
@@ -483,6 +479,11 @@ void LyricEngine::onLyricFinished(quint64 requestId, const QString &songId, cons
             advanceWalk();
             return;
         }
+        // A provider that answered with an untimed (or placeholder) lyric answered
+        // fine: it is simply not usable, so it is neither applied nor cached. The
+        // walk falls through to this provider's next candidate and then the next
+        // source, without recording a failure.
+        qCDebug(lcLyrics) << "ignoring unusable provider lyric for" << m_track.title;
     }
 
     advanceWalk();
@@ -526,18 +527,25 @@ void LyricEngine::setLyric(const Lyric &origin, const Lyric &translation, const 
     m_pendingLyrics.clear();
     m_walkDone = true;
     m_queryPending = false;
-    m_localFallbackOrigin.clear();
-    m_localFallbackTranslation.clear();
-    m_localFallbackSet = false;
     setLastError(QString());
     if (track.isValid()) {
         m_track = track;
         m_hasProcessedTrack = true;
     }
 
-    m_origin = origin;
-    m_translation = translation;
-    setState(origin.isEmpty() && translation.isEmpty() ? State::NotFound : State::Found);
+    if (canFollowMusic(origin)) {
+        m_origin = origin;
+        m_translation = translation;
+        setState(State::Found);
+    } else {
+        // A lyric without timestamps cannot follow playback, so it is not a
+        // lyric: nothing is stored and the state says so, exactly as the walk
+        // treats one from any source. This keeps the engine from being Found
+        // with nothing to render.
+        m_origin.clear();
+        m_translation.clear();
+        setState(State::NotFound);
+    }
     Q_EMIT lyricChanged();
     Q_EMIT lyricsChanged(m_origin, m_translation);
     updateCurrent(true);
@@ -557,9 +565,6 @@ void LyricEngine::clear()
     m_walkDone = true;
     m_candidatesByProvider.clear();
     m_searchesAnswered.clear();
-    m_localFallbackOrigin.clear();
-    m_localFallbackTranslation.clear();
-    m_localFallbackSet = false;
     m_offset = 0;
     setLastError(QString());
     // Forget the track as well as its lyrics. The processed-track guard exists so
@@ -605,7 +610,7 @@ void LyricEngine::setDisplayMode(LyricDisplayMode mode)
 
 int LyricEngine::currentIndex() const
 {
-    if (m_origin.kind != LyricKind::Timed || m_origin.lines.isEmpty()) {
+    if (!canFollowMusic(m_origin) || m_origin.lines.isEmpty()) {
         return -1;
     }
     return findNextLyric(m_origin, m_elapsed + m_offset);
@@ -649,17 +654,9 @@ QStringList LyricEngine::translationWindow(int from, int count) const
 
 QString LyricEngine::currentText() const
 {
-    if (m_origin.kind == LyricKind::NoTimestamp) {
-        // No timing information: show the whole plain body.
-        QStringList texts;
-        for (const LyricLine &line : m_origin.lines) {
-            if (!line.text.trimmed().isEmpty()) {
-                texts.append(line.text);
-            }
-        }
-        return texts.join(QLatin1Char('\n'));
-    }
-    if (m_origin.kind != LyricKind::Timed) {
+    // Only a lyric that can follow playback has a current line; anything else
+    // renders as nothing (an untimed body has no position to show a line at).
+    if (!canFollowMusic(m_origin)) {
         return {};
     }
 
@@ -689,7 +686,7 @@ QString LyricEngine::currentText() const
 
 QString LyricEngine::currentTranslation() const
 {
-    if (m_mode != LyricDisplayMode::Both || m_origin.kind != LyricKind::Timed) {
+    if (m_mode != LyricDisplayMode::Both || !canFollowMusic(m_origin)) {
         return {};
     }
     const int idx = currentIndex();

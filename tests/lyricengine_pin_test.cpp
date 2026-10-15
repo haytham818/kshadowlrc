@@ -2,8 +2,9 @@
 // SPDX-FileCopyrightText: 2026 KShadowLrc Contributors
 //
 // Offline checks for the engine's pinned-lyric override: a pin matching the
-// track wins before the cache and before any search, an untimed pin is used
-// as-is, a non-matching pin is ignored, and a pin is never written to the cache.
+// track wins before the cache and before any search, an untimed pin is ignored
+// like any other untimed lyric, a non-matching pin is ignored, and a pin is
+// never written to the cache.
 // Isolated the same way as pinstore_test.cpp: HOME and the XDG locations point
 // at a private QTemporaryDir before the application object exists.
 
@@ -51,7 +52,8 @@ private Q_SLOTS:
     void matchingPinPreventsAnySearch();
     void matchingPinIsReadBeforeTheCache();
     void nonMatchingPinIsIgnored();
-    void untimedPinnedLyricIsUsedAsIs();
+    void untimedPinnedLyricIsIgnored();
+    void untimedPinAloneLeavesNothingToShow();
     void clearingThePinRestoresTheWalk();
     void pinnedLyricIsNotCached();
 };
@@ -139,8 +141,12 @@ void LyricEnginePinTest::nonMatchingPinIsIgnored()
     QCOMPARE(netease.queryCalls, 1);
 }
 
-/*! An untimed pin is the user's choice, so it is kept, not deferred like a local file. */
-void LyricEnginePinTest::untimedPinnedLyricIsUsedAsIs()
+/*!
+ * An untimed pin cannot follow music, so the engine ignores it (the controller
+ * refuses one up front, but a hand-edited pins.json still must not win) and the
+ * walk runs as if no pin were there.
+ */
+void LyricEnginePinTest::untimedPinnedLyricIsIgnored()
 {
     const TrackMeta track = stubTrack(QStringLiteral("Pin Untimed"));
     clearCache(track);
@@ -156,9 +162,25 @@ void LyricEnginePinTest::untimedPinnedLyricIsUsedAsIs()
     engine.setTrack(track);
 
     QVERIFY(engine.state() == LyricEngine::State::Found);
-    QCOMPARE(engine.originLyric().kind, LyricKind::NoTimestamp); // used as-is
-    QCOMPARE(engine.currentText(), QStringLiteral("plain pinned body\nsecond line"));
-    QCOMPARE(netease.searchCalls, 0);
+    QCOMPARE(engine.lineText(0), QStringLiteral("Provider line")); // the pin was skipped
+    QCOMPARE(netease.searchCalls, 1); // the walk ran
+    QCOMPARE(netease.queryCalls, 1);
+
+    clearCache(track);
+}
+
+/*! An untimed pin with nothing else to fall back on leaves the track as "no lyrics". */
+void LyricEnginePinTest::untimedPinAloneLeavesNothingToShow()
+{
+    const TrackMeta track = stubTrack(QStringLiteral("Pin Untimed Only"));
+    clearCache(track);
+
+    LyricEngine engine;
+    engine.setPinnedLyric(pinstore::keyFor(track), pinnedStore(QStringLiteral("plain pinned body")));
+    engine.setTrack(track);
+
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(engine.currentText().isEmpty());
 }
 
 /*! Clearing the pin (an empty key or store) hands the track back to the walk. */

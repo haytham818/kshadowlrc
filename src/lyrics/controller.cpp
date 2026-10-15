@@ -79,6 +79,16 @@ QString queryTextFor(const TrackMeta &track)
     return parts.join(QLatin1Char(' '));
 }
 
+/*!
+ * Whether a stored pin is worth applying at all: it carries text, and that text
+ * can follow the music. A record that cannot be shown would otherwise claim the
+ * song is pinned and then resolve it the ordinary way.
+ */
+bool pinIsShowable(const pinstore::Pin &pin)
+{
+    return pin.store.hasAny() && canFollowMusic(parseLrc(pin.store.lyric));
+}
+
 } // namespace
 
 LyricsController::LyricsController(QObject *parent)
@@ -152,7 +162,7 @@ QString LyricsController::translationText() const
 
 QStringList LyricsController::upcomingLines() const
 {
-    if (!displayActive() || m_engine.originLyric().kind != LyricKind::Timed) {
+    if (!displayActive() || !canFollowMusic(m_engine.originLyric())) {
         return {};
     }
     const int count = upcomingLineCount();
@@ -400,6 +410,12 @@ void LyricsController::onPinLyricFinished(quint64 requestId, const QString &song
         setPinStatus(i18nc("@info:status", "That entry carries no lyric text to pin."));
         return;
     }
+    // The overlay never shows a lyric without timestamps, so pinning one would
+    // store a promise it cannot keep. Say so here, where the user can pick again.
+    if (!canFollowMusic(parseLrc(store.lyric))) {
+        setPinStatus(i18nc("@info:status", "That lyric has no timestamps, so it cannot follow the music and is never shown."));
+        return;
+    }
 
     pinstore::Pin pin;
     pin.store = store;
@@ -440,10 +456,11 @@ void LyricsController::applyPinFor(const TrackMeta &track)
     if (track.isValid()) {
         m_currentPin = pinstore::lookup(track);
     }
-    // A record with no text is not a pin: it would claim the song is pinned and
-    // then resolve it the ordinary way, which is the opposite of a promise.
-    if (m_currentPin && !m_currentPin->store.hasAny()) {
-        qCWarning(lcLyrics) << "ignoring a pinned record that carries no text for" << track.title;
+    // Only a pin that can actually be shown counts: a record with no text, or one
+    // that cannot follow the music, would claim the song is pinned and then
+    // resolve it the ordinary way, which is the opposite of a promise.
+    if (m_currentPin && !pinIsShowable(*m_currentPin)) {
+        qCWarning(lcLyrics) << "ignoring a pinned record that cannot be shown for" << track.title;
         m_currentPin.reset();
     }
 

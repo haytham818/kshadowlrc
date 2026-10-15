@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 KShadowLrc Contributors
 //
 // Offline checks for the engine's order-driven resolution walk: which source is
-// consulted first, that a local hit never reaches the network, that an untimed
-// local lyric does not stop the walk, and where the cache sits. No network, no
-// D-Bus, no event loop.
+// consulted first, that a local hit never reaches the network, that a lyric
+// without timestamps is refused everywhere the walk looks, and where the cache
+// sits. No network, no D-Bus, no event loop.
 
 #include "enginestubs.h"
 
@@ -40,8 +40,12 @@ private Q_SLOTS:
     void providerOrderBeatsCandidateScore();
     void providerBeforeLocalWins();
     void localUsedWhenProviderYieldsNothing();
-    void untimedLocalIsADeferredFallback();
-    void deferredFallbackDoesNotLeakIntoTheNextTrack();
+    void untimedLocalIsNotUsable();
+    void untimedCandidateFallsThroughToTheNextCandidate();
+    void providerWithOnlyUntimedLyricsMovesToTheNextSource();
+    void cachedUntimedLyricIsSkipped();
+    void onlyUntimedContentEndsNotFound();
+    void untimedTrackDoesNotLeakIntoTheNextTrack();
     void unknownIdsAreDropped();
     void pendingQueryIsNotDuplicatedByAnotherSearch();
 
@@ -192,13 +196,13 @@ void LyricEngineOrderTest::localUsedWhenProviderYieldsNothing()
 }
 
 /*!
- * A plain (untimed) local lyric cannot be synced, so it must not shadow a
- * provider's timed one -- but it is still shown, whole, when nothing else
- * yields content.
+ * A plain (untimed) local lyric cannot be synced, so it is not a lyric at all:
+ * it never shadows a provider's timed one, and when nothing else yields a timed
+ * lyric the result is NotFound with nothing to show.
  */
-void LyricEngineOrderTest::untimedLocalIsADeferredFallback()
+void LyricEngineOrderTest::untimedLocalIsNotUsable()
 {
-    // (a) A provider's timed lyric wins over the deferred plain local one.
+    // (a) A provider's timed lyric wins over the unusable plain local one.
     {
         const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Local Provider Wins"));
         clearCache(track);
@@ -222,9 +226,9 @@ void LyricEngineOrderTest::untimedLocalIsADeferredFallback()
         QCOMPARE(netease.searchCalls, 1); // ...and did not stop the walk
     }
 
-    // (b) With nothing else yielded, the plain local body is shown whole.
+    // (b) With nothing else usable, the untimed local body is not shown at all.
     {
-        const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Local Fallback"));
+        const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Local Only"));
         clearCache(track);
 
         StubProvider netease(QStringLiteral("netease"));
@@ -239,8 +243,8 @@ void LyricEngineOrderTest::untimedLocalIsADeferredFallback()
         engine.setSourceOrder({QStringLiteral("local"), QStringLiteral("netease")});
         engine.setTrack(track);
 
-        QVERIFY(engine.state() == LyricEngine::State::Found);
-        QCOMPARE(engine.currentText(), QStringLiteral("plain text\nwith no timestamps at all\nthird line"));
+        QVERIFY(engine.state() == LyricEngine::State::NotFound);
+        QVERIFY(engine.currentText().isEmpty());
         QVERIFY(engine.lastError().isEmpty());
         QVERIFY(local.loadCalls == 1);
         QCOMPARE(netease.searchCalls, 1);
@@ -248,21 +252,144 @@ void LyricEngineOrderTest::untimedLocalIsADeferredFallback()
 }
 
 /*!
- * The deferred lyric is per-track state: it must be dropped when a new track
- * starts, never carried over as a stale fallback.
+ * A provider's untimed candidate is not usable, so the walk tries that
+ * provider's next ranked candidate; a timed one there wins.
  */
-void LyricEngineOrderTest::deferredFallbackDoesNotLeakIntoTheNextTrack()
+void LyricEngineOrderTest::untimedCandidateFallsThroughToTheNextCandidate()
 {
-    const TrackMeta first = stubTrack(QStringLiteral("Order Fallback First"));
-    const TrackMeta second = stubTrack(QStringLiteral("Order Fallback Second"));
+    const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Candidate"));
+    clearCache(track);
+
+    StubProvider netease(QStringLiteral("netease"));
+    netease.autoDeliver = false; // answers each query by hand, so the two differ
+    netease.searchResults = {stubCandidate(QStringLiteral("c1"), track.title), stubCandidate(QStringLiteral("c2"), track.title)};
+
+    LyricEngine engine;
+    engine.setProviders({&netease});
+    engine.setSourceOrder({QStringLiteral("netease")});
+    engine.setTrack(track);
+
+    QCOMPARE(netease.m_searchIds.size(), 1);
+    netease.deliverSearch(netease.m_searchIds.at(0), netease.searchResults);
+
+    // Candidate 0 is queried first; its untimed lyric is refused.
+    QCOMPARE(netease.m_queryIds.size(), 1);
+    netease.deliverLyric(netease.m_queryIds.at(0), QStringLiteral("c1"), LyricStore{QStringLiteral("plain text\nno timestamps"), QString()});
+    QVERIFY(engine.state() == LyricEngine::State::Loading);
+
+    // The walk falls through to candidate 1, whose timed lyric wins.
+    QCOMPARE(netease.m_queryIds.size(), 2);
+    netease.deliverLyric(netease.m_queryIds.at(1), QStringLiteral("c2"), timedStore(QStringLiteral("[00:01.00]Second candidate")));
+
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QCOMPARE(engine.lineText(0), QStringLiteral("Second candidate"));
+    QCOMPARE(netease.queryCalls, 2);
+
+    clearCache(track);
+}
+
+/*! A provider that can only answer with untimed lyrics moves the walk to the next source. */
+void LyricEngineOrderTest::providerWithOnlyUntimedLyricsMovesToTheNextSource()
+{
+    const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Provider"));
+    clearCache(track);
+
+    StubProvider netease(QStringLiteral("netease"));
+    netease.searchResults = {stubCandidate(QStringLiteral("n1"), track.title)};
+    netease.lyricStore = LyricStore{QStringLiteral("only a plain body"), QString()};
+
+    StubLocalSource local;
+    local.store = timedStore(QStringLiteral("[00:01.00]Local line"));
+
+    LyricEngine engine;
+    engine.setProviders({&netease});
+    engine.setLocalSource(&local);
+    engine.setSourceOrder({QStringLiteral("netease"), QStringLiteral("local")});
+    engine.setTrack(track);
+
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QCOMPARE(engine.lineText(0), QStringLiteral("Local line"));
+    QCOMPARE(netease.queryCalls, 1); // answered, with an unusable lyric
+    QVERIFY(local.loadCalls == 1); // so the walk moved on to the next source
+    QVERIFY(engine.lastError().isEmpty()); // an unusable answer is not a failure
+}
+
+/*! A cached untimed lyric is skipped, and its saved offset is not applied either. */
+void LyricEngineOrderTest::cachedUntimedLyricIsSkipped()
+{
+    const TrackMeta track = stubTrack(QStringLiteral("Order Untimed Cache"));
+    clearCache(track);
+    // A cached plain body with a saved offset: had it been applied, both the text
+    // and the offset would show.
+    QVERIFY(LyricCache::store(track, LyricStore{QStringLiteral("cached plain body"), QString()}, 5000));
+
+    StubProvider netease(QStringLiteral("netease"));
+    netease.searchResults = {stubCandidate(QStringLiteral("n1"), track.title)};
+    netease.lyricStore = timedStore(QStringLiteral("[00:01.00]Fresh line"));
+
+    LyricEngine engine;
+    engine.setProviders({&netease});
+    engine.setSourceOrder({QStringLiteral("netease")});
+    engine.setTrack(track);
+
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QCOMPARE(engine.lineText(0), QStringLiteral("Fresh line"));
+    QCOMPARE(engine.lyricOffsetMs(), 0); // the cached 5000 never reached the engine
+    QCOMPARE(netease.searchCalls, 1); // the skipped cache sent the walk to the network
+
+    clearCache(track);
+}
+
+/*!
+ * A song whose only lyrics are untimed ends as "no lyrics", not as Found: local,
+ * cache and provider are all consulted and all refused.
+ */
+void LyricEngineOrderTest::onlyUntimedContentEndsNotFound()
+{
+    const TrackMeta track = stubTrack(QStringLiteral("Order Only Untimed"));
+    clearCache(track);
+    QVERIFY(LyricCache::store(track, LyricStore{QStringLiteral("cached plain body"), QString()}, 0));
+
+    StubProvider netease(QStringLiteral("netease"));
+    netease.searchResults = {stubCandidate(QStringLiteral("n1"), track.title)};
+    netease.lyricStore = LyricStore{QStringLiteral("provider plain body"), QString()};
+
+    StubLocalSource local;
+    local.store = LyricStore{QStringLiteral("plain local body\nsecond line"), QString()};
+
+    LyricEngine engine;
+    engine.setProviders({&netease});
+    engine.setLocalSource(&local);
+    engine.setSourceOrder({QStringLiteral("local"), QStringLiteral("netease")});
+    engine.setTrack(track);
+
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(engine.currentText().isEmpty()); // nothing to show...
+    QVERIFY(engine.lineWindow(0, 10).isEmpty()); // ...and no upcoming lines either
+    QVERIFY(engine.lastError().isEmpty()); // untimed answers are not failures
+    QVERIFY(local.loadCalls == 1);
+    QCOMPARE(netease.searchCalls, 1);
+    QCOMPARE(netease.queryCalls, 1);
+
+    clearCache(track);
+}
+
+/*!
+ * An untimed track leaves nothing behind: the next track's provider lyric shows,
+ * never a stale plain body from the previous one.
+ */
+void LyricEngineOrderTest::untimedTrackDoesNotLeakIntoTheNextTrack()
+{
+    const TrackMeta first = stubTrack(QStringLiteral("Order Untimed First"));
+    const TrackMeta second = stubTrack(QStringLiteral("Order Untimed Second"));
     clearCache(first);
     clearCache(second);
 
     StubProvider netease(QStringLiteral("netease"));
-    netease.searchResults.clear(); // nothing usable, for either track
+    netease.searchResults.clear(); // nothing usable for the first track
 
     StubLocalSource local;
-    local.store = LyricStore{QStringLiteral("plain text\nno timestamps"), QString()};
+    local.store = LyricStore{QStringLiteral("plain local body\nno timestamps"), QString()};
 
     LyricEngine engine;
     engine.setProviders({&netease});
@@ -270,16 +397,20 @@ void LyricEngineOrderTest::deferredFallbackDoesNotLeakIntoTheNextTrack()
     engine.setSourceOrder({QStringLiteral("local"), QStringLiteral("netease")});
 
     engine.setTrack(first);
-    QVERIFY(engine.state() == LyricEngine::State::Found);
-    QVERIFY(engine.currentText() == QStringLiteral("plain text\nno timestamps"));
-
-    // The second track's file carries no lyric: the first track's deferred one
-    // must not leak through and be shown as if it were the second's.
-    local.store = std::nullopt;
-    engine.setTrack(second);
     QVERIFY(engine.state() == LyricEngine::State::NotFound);
     QVERIFY(engine.currentText().isEmpty());
-    QVERIFY(local.loadCalls == 2); // the local source was asked again
+
+    // The second track has a usable provider lyric; it must show, with no trace
+    // of the first track's untimed body.
+    netease.searchResults = {stubCandidate(QStringLiteral("n2"), second.title)};
+    netease.lyricStore = timedStore(QStringLiteral("[00:01.00]Second track line"));
+    engine.setTrack(second);
+
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    QCOMPARE(engine.lineText(0), QStringLiteral("Second track line"));
+    QVERIFY(local.loadCalls == 2);
+
+    clearCache(second);
 }
 
 /*! Unknown ids are dropped; missing known ones are appended in default order. */

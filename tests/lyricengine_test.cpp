@@ -109,6 +109,7 @@ private Q_SLOTS:
     void placeholderFiltered();
     void staleResultIgnored();
     void noResults();
+    void injectedUntimedLyricIsNotFound();
     void clearForgetsTheTrack();
 };
 
@@ -262,6 +263,34 @@ void LyricEngineTest::noResults()
     engine.setProviders({&provider});
     engine.setTrack(track);
     QVERIFY(engine.state() == LyricEngine::State::NotFound);
+}
+
+/*!
+ * An injected lyric that cannot follow music is no lyric at all: the engine must
+ * not be Found with a body it will render as nothing.
+ */
+void LyricEngineTest::injectedUntimedLyricIsNotFound()
+{
+    Lyric untimed;
+    untimed.kind = LyricKind::NoTimestamp;
+    untimed.lines.append({QStringLiteral("plain body"), 0});
+
+    LyricEngine engine;
+    engine.setLyric(untimed, Lyric{});
+
+    QVERIFY(engine.state() == LyricEngine::State::NotFound);
+    QVERIFY(engine.currentText().isEmpty());
+    QVERIFY(engine.lineCount() == 0); // nothing was stored to render later
+
+    // A timed injection still resolves, so the rule only rejects unusable ones.
+    Lyric timed;
+    timed.kind = LyricKind::Timed;
+    timed.lines.append({QStringLiteral("shown line"), 1000});
+    engine.setLyric(timed, Lyric{});
+
+    QVERIFY(engine.state() == LyricEngine::State::Found);
+    engine.setElapsed(1000);
+    QCOMPARE(engine.currentText(), QStringLiteral("shown line"));
 }
 
 void LyricEngineTest::clearForgetsTheTrack()

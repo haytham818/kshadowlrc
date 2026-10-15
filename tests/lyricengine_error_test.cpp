@@ -39,7 +39,7 @@ private Q_SLOTS:
     void emptyAnswerIsNotFound();
     void unusableAnswerIsNotFound();
     void errorClearedOnNextSuccessfulTrack();
-    void deferredLocalWinsOverTransportError();
+    void untimedLocalDoesNotRescueATransportError();
 };
 
 void LyricEngineErrorTest::initTestCase()
@@ -161,10 +161,13 @@ void LyricEngineErrorTest::errorClearedOnNextSuccessfulTrack()
     clearCache(ok);
 }
 
-/*! A deferred local lyric is content, so it wins over a recorded failure too. */
-void LyricEngineErrorTest::deferredLocalWinsOverTransportError()
+/*!
+ * An untimed local lyric is not usable, so it does not rescue a transport
+ * failure: the walk ends in Error with the provider's message still set.
+ */
+void LyricEngineErrorTest::untimedLocalDoesNotRescueATransportError()
 {
-    const TrackMeta track = stubTrack(QStringLiteral("Error Deferred Local Song"));
+    const TrackMeta track = stubTrack(QStringLiteral("Error Untimed Local Song"));
     clearCache(track);
 
     StubProvider provider(QStringLiteral("netease"));
@@ -182,14 +185,13 @@ void LyricEngineErrorTest::deferredLocalWinsOverTransportError()
     QVERIFY(engine.state() == LyricEngine::State::Loading);
     QVERIFY(provider.m_searchIds.size() == 1);
 
-    // The provider fails; the deferred local lyric is the only content left, and
-    // content wins over the error, clearing lastError exactly as a provider's
-    // plain lyric would.
+    // The provider fails; the untimed local lyric cannot stand in for content,
+    // so the failure stands.
     provider.failSearch(provider.m_searchIds.at(0), QStringLiteral("network unreachable"));
 
-    QVERIFY(engine.state() == LyricEngine::State::Found);
-    QVERIFY(engine.lastError().isEmpty());
-    QCOMPARE(engine.currentText(), QStringLiteral("plain text\nno timestamps"));
+    QVERIFY(engine.state() == LyricEngine::State::Error);
+    QCOMPARE(engine.lastError(), QStringLiteral("network unreachable"));
+    QVERIFY(engine.currentText().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(LyricEngineErrorTest)

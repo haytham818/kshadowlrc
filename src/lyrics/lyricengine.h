@@ -45,7 +45,7 @@ public:
     enum class State {
         Idle, //!< nothing requested yet
         Loading, //!< searching/fetching
-        Found, //!< a timed or plain lyric is loaded
+        Found, //!< a timed lyric (one that can follow playback) is loaded
         NotFound, //!< searched and found nothing usable
         Error, //!< a transport/protocol failure
     };
@@ -120,10 +120,12 @@ public:
 
     /*!
      * Point the engine at a new track. A matching pin wins outright; otherwise
-     * a timed local lyric, a cache hit before the first provider or a provider
-     * lyric resolves it, and a plain (untimed) local lyric is held back as a
-     * last-resort fallback used only when no source yields content. The walk
-     * stops at the first winner and never consults a later source.
+     * the walk takes the first lyric that can follow music: a timed local lyric,
+     * a cache hit before the first provider, or a provider lyric. A lyric
+     * without timestamps cannot follow playback, so it is not a candidate at all
+     * and the walk simply keeps looking -- a song whose only lyrics are untimed
+     * ends as "no lyrics". The walk stops at the first usable lyric and never
+     * consults a later source.
      */
     void setTrack(const TrackMeta &track);
     const TrackMeta &track() const
@@ -153,8 +155,9 @@ public:
 
     /*!
      * Inject a parsed lyric pair directly (demo mode, or a player-supplied
-     * lyric hint), bypassing cache and providers. An empty \p origin still sets
-     * State::NotFound. An empty \p track leaves the current track untouched.
+     * lyric hint), bypassing cache and providers. A lyric that cannot follow
+     * music is treated as no lyric: State::NotFound with nothing to show. An
+     * empty \p track leaves the current track untouched.
      */
     void setLyric(const Lyric &origin, const Lyric &translation, const TrackMeta &track = TrackMeta());
 
@@ -298,13 +301,6 @@ private:
     bool m_walking = false;
     QHash<int, QList<RankedSong>> m_candidatesByProvider;
     QSet<int> m_searchesAnswered;
-
-    // A non-placeholder local lyric that could not be synced (LyricKind other
-    // than Timed), held as the last resort: the walk shows it only when no
-    // source produced a timed lyric. Reset with the rest of the per-track state.
-    Lyric m_localFallbackOrigin;
-    Lyric m_localFallbackTranslation;
-    bool m_localFallbackSet = false;
 };
 
 } // namespace kshadowlrc

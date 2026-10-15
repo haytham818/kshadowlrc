@@ -32,6 +32,20 @@ namespace kshadowlrc
 Lyric parseLrc(const QString &text);
 
 /*!
+ * Whether a parsed lyric has anything the overlay can show.
+ *
+ * It follows the music or it is not shown: a lyric without a single timestamp
+ * cannot be synced to playback, so it counts as no lyric at all rather than as a
+ * worse one. Callers use this instead of comparing kinds, so "what is worth
+ * showing" has one answer -- the engine applies it to every source, the
+ * controller to the lyric the user is trying to pin.
+ */
+inline bool canFollowMusic(const Lyric &lyric)
+{
+    return lyric.kind == LyricKind::Timed;
+}
+
+/*!
  * Remove every extended timestamp tag (\c <mm:ss.ms>) from \p text, leaving all
  * other content untouched. A tag matches when it is \c < + 1-2 digits + ':' +
  * 1-2 digits + '.' + 1-3 digits + '>' (7 to 11 characters total); anything else
