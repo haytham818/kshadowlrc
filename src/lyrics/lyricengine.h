@@ -91,11 +91,39 @@ public:
     }
 
     /*!
-     * Point the engine at a new track. A timed local lyric, a cache hit before
-     * the first provider or a provider lyric resolves it; a plain (untimed)
-     * local lyric is held back as a last-resort fallback and used only when no
-     * source yields content. The walk stops at the first winner and never
-     * consults a later source.
+     * The pinned lyric override: the lyric the user explicitly chose for one
+     * song, identified by \p key (see pinstore::keyFor()). When it matches the
+     * track passed to setTrack(), it is applied before the cache step and before
+     * any search, and no provider is asked. An empty \p key or an empty \p
+     * store clears it. It is configuration, not per-track state: it survives
+     * clear() until changed here.
+     */
+    void setPinnedLyric(const QString &key, const LyricStore &store);
+    QString pinnedLyricKey() const
+    {
+        return m_pinnedKey;
+    }
+    LyricStore pinnedLyricStore() const
+    {
+        return m_pinnedStore;
+    }
+
+    /*!
+     * The enabled providers in the order the walk tries them in: the provider
+     * subset of the source order, without the cache and without the local
+     * source. The manual search lists one group per provider, and it lists them
+     * in this order, so what the user sees first is what the walk would try
+     * first. This is the only home of the ordering rule; callers do not
+     * reimplement it.
+     */
+    QList<LyricProvider *> providersInSourceOrder() const;
+
+    /*!
+     * Point the engine at a new track. A matching pin wins outright; otherwise
+     * a timed local lyric, a cache hit before the first provider or a provider
+     * lyric resolves it, and a plain (untimed) local lyric is held back as a
+     * last-resort fallback used only when no source yields content. The walk
+     * stops at the first winner and never consults a later source.
      */
     void setTrack(const TrackMeta &track);
     const TrackMeta &track() const
@@ -227,6 +255,11 @@ private:
     LocalSource *m_localSource = nullptr;
     QStringList m_sourceOrder;
     QString m_lastError;
+
+    // The pinned lyric override (see setPinnedLyric()). Configuration, not
+    // per-track state, so it is not reset by clear() or setTrack().
+    QString m_pinnedKey;
+    LyricStore m_pinnedStore;
     Lyric m_origin;
     Lyric m_translation;
     State m_state = State::Idle;

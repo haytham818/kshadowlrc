@@ -7,6 +7,7 @@
 #include "lyrics/localsource.h"
 #include "lyrics/lrcparser.h"
 #include "lyrics/lyriccache.h"
+#include "lyrics/pinstore.h"
 
 #include <QSet>
 #include <QStringList>
@@ -100,6 +101,17 @@ void LyricEngine::setSourceOrder(const QStringList &order)
     m_sourceOrder = order;
 }
 
+void LyricEngine::setPinnedLyric(const QString &key, const LyricStore &store)
+{
+    if (key.isEmpty() || !store.hasAny()) {
+        m_pinnedKey.clear();
+        m_pinnedStore = LyricStore{};
+        return;
+    }
+    m_pinnedKey = key;
+    m_pinnedStore = store;
+}
+
 void LyricEngine::setTrack(const TrackMeta &track)
 {
     if (m_hasProcessedTrack && track.sameSong(m_track)) {
@@ -122,6 +134,20 @@ void LyricEngine::setTrack(const TrackMeta &track)
     if (!track.isValid()) {
         setState(State::NotFound);
         updateCurrent(true);
+        return;
+    }
+
+    // A pin is the user's explicit choice, so it outranks the cache and every
+    // source: apply it before either is consulted and start no search at all.
+    // Even an untimed pinned lyric is used as-is -- the local source's deferred
+    // fallback is a guess about quality, a pin is a decision.
+    if (!m_pinnedKey.isEmpty() && m_pinnedStore.hasAny() && m_pinnedKey == pinstore::keyFor(track)) {
+        qCDebug(lcLyrics) << "using the pinned lyric for" << track.title;
+        const Lyric origin = parseLrc(m_pinnedStore.lyric);
+        const Lyric translation = m_pinnedStore.tlyric.isEmpty() ? Lyric{} : pairTranslation(origin, parseLrc(m_pinnedStore.tlyric));
+        // Deliberately not cached: the pin is already the first priority, and a
+        // cached copy would only grow stale.
+        applyFoundLyric(origin, translation);
         return;
     }
 
@@ -169,6 +195,23 @@ QStringList LyricEngine::effectiveOrder() const
     appendKnown(requested);
     appendKnown(defaults);
     return order;
+}
+
+QList<LyricProvider *> LyricEngine::providersInSourceOrder() const
+{
+    QList<LyricProvider *> ordered;
+    for (const QString &id : effectiveOrder()) {
+        if (id == QLatin1String("local")) {
+            continue;
+        }
+        for (LyricProvider *provider : m_providers) {
+            if (provider && provider->name() == id) {
+                ordered.append(provider);
+                break;
+            }
+        }
+    }
+    return ordered;
 }
 
 QList<LyricEngine::Step> LyricEngine::resolveSteps() const
