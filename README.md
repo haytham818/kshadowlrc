@@ -96,11 +96,30 @@ setting; the values it accepts and its default are in
 [`src/config/kshadowlrcsettings.kcfg`](src/config/kshadowlrcsettings.kcfg),
 and the settings window orders them for you.
 
+## When the match is wrong
+
+The source order and the candidates are a guess, and sometimes the guess is the
+wrong song. The tray menu's **Search lyrics…** opens a small window to search by
+hand: it starts from the playing track's title and artist, asks every enabled
+source at once, and lists what each one returned, grouped by source in the order
+you configured. Nothing is picked for you — that is the point of opening it.
+
+Choosing an entry **pins** that lyric to the song. A pin outranks everything: the
+cache and every source are skipped, so the lyric you chose is the lyric you get,
+the next time the song plays and with the machine offline as well. The window
+says where the pinned lyric came from and can forget it again, after which the
+normal resolution takes over.
+
+Pins live in `pins.json` under `QStandardPaths::AppDataLocation` — one per song,
+in a file you can edit or delete by hand, and deliberately not in the cache,
+which is disposable. A song whose player reports no name and no length has
+nothing to pin a lyric to, and the window says so rather than failing quietly.
+
 ## Configuring
 
 The tray icon is the way in when the overlay is click-through and out of the
 taskbar: left click shows or hides the overlay, and the menu reopens the
-settings window, adjusts the offset, or quits.
+settings window, opens the search window, adjusts the offset, or quits.
 
 The settings window edits every key and writes each change immediately, so a
 change reaches the running overlay as it is made. What can be set, with
@@ -110,7 +129,9 @@ that file is the contract. It names the config file it reads and writes at the
 top; it lands in KDE's standard config location.
 
 The lyrics are cached under `QStandardPaths::CacheLocation`; see `cacheDir()`
-in [src/lyrics/lyriccache.cpp](src/lyrics/lyriccache.cpp).
+in [src/lyrics/lyriccache.cpp](src/lyrics/lyriccache.cpp). The lyrics you pinned
+yourself are not in there — they are a decision, not a copy, and they survive
+clearing the cache.
 
 ### Global shortcuts
 
@@ -142,6 +163,11 @@ maximum either way; both numbers are `OffsetStepMs` and `MaxOffsetMs` in
   includes TagLib.
 - Providers implement [`LyricProvider`](src/lyrics/provider.h) and live in
   [src/lyrics/providers/](src/lyrics/providers/); every call is asynchronous.
+- [`LyricSearch`](src/lyrics/lyricsearch.cpp) fans a manual query out to the
+  enabled providers at once and groups the answers by provider — in the
+  configured order, never in the order they arrive.
+- [`pinstore`](src/lyrics/pinstore.cpp) keeps the lyrics you chose yourself, one
+  per song; the engine applies a matching one before it looks anywhere else.
 - [`LyricsController`](src/lyrics/controller.cpp) is the QML bridge.
   [src/qml/main.qml](src/qml/main.qml) is the overlay's content and
   [src/platform/overlaywindow.cpp](src/platform/overlaywindow.cpp) is the
