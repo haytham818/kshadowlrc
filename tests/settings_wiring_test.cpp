@@ -84,6 +84,12 @@ void SettingsWiringTest::defaultsReadFromTheEmptyConfig()
     // --- defaults read from the (empty) config file -------------------------
     QVERIFY(m_controller.displayMode() == 2); // Both
     QVERIFY(providerNames(m_controller) == QStringList({QStringLiteral("netease"), QStringLiteral("lrclib")}));
+    // The placement defaults reproduce the old single-edge look: bottom edge,
+    // 64 px above it, horizontally centred.
+    QVERIFY(m_settings->verticalAnchor() == KShadowLrcSettings::EnumVerticalAnchor::Bottom);
+    QVERIFY(m_settings->verticalMargin() == 64);
+    QVERIFY(m_settings->horizontalAnchor() == KShadowLrcSettings::EnumHorizontalAnchor::Center);
+    QVERIFY(m_settings->horizontalMargin() == 0);
     QVERIFY(m_settings->lyricOffsetMs() == 0);
     QVERIFY(m_trackerOffsetEmits == 0); // wiring startup does not emit
     QVERIFY(m_settingsOffsetEmits == 0);

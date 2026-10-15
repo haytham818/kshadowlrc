@@ -61,6 +61,7 @@ const QString kReset = QStringLiteral("lyrics-offset-reset");
 const QString kToggle = QStringLiteral("toggle-overlay");
 const QString kSettings = QStringLiteral("settings");
 const QString kSearch = QStringLiteral("search");
+const QString kAdjust = QStringLiteral("adjust");
 const QString kQuit = QStringLiteral("quit");
 
 /*!
@@ -132,6 +133,7 @@ private Q_SLOTS:
     void directSlotsTakeTheClampedPath();
     void requestsFireExactlyOnce();
     void overlayVisibilityRelabelsTheToggle();
+    void adjustingFollowsCheckState();
     void trayToolTipAndSharedMenu();
     void trayToolTipFollowsLyricState();
     void statusTextPinsEachState();
@@ -148,6 +150,7 @@ private:
     QAction *m_toggle = nullptr;
     QAction *m_settingsAction = nullptr;
     QAction *m_searchAction = nullptr;
+    QAction *m_adjust = nullptr;
     QAction *m_quit = nullptr;
     KStatusNotifierItem *m_tray = nullptr;
 };
@@ -164,6 +167,7 @@ ControlServiceTest::ControlServiceTest()
     m_toggle = m_service.action(kToggle);
     m_settingsAction = m_service.action(kSettings);
     m_searchAction = m_service.action(kSearch);
+    m_adjust = m_service.action(kAdjust);
     m_quit = m_service.action(kQuit);
 
     // The tray is a child of the service; finding it is how the test reaches
@@ -183,6 +187,9 @@ void ControlServiceTest::actionsResolve()
     QVERIFY(m_settingsAction != nullptr);
     QVERIFY(m_searchAction != nullptr);
     QVERIFY(m_searchAction->text() == QStringLiteral("Search lyrics…"));
+    QVERIFY(m_adjust != nullptr);
+    QVERIFY(m_adjust->text() == QStringLiteral("Adjust position and size"));
+    QVERIFY(m_adjust->isCheckable());
     QVERIFY(m_quit != nullptr);
     QVERIFY(m_service.action(QStringLiteral("nope")) == nullptr);
     QVERIFY(m_earlier->objectName() == kEarlier);
@@ -259,6 +266,8 @@ void ControlServiceTest::requestsFireExactlyOnce()
     int searchCount = 0;
     int quitCount = 0;
     int toggleCount = 0;
+    int adjustCount = 0;
+    bool adjustRequestedState = false;
     QObject::connect(&m_service, &ControlService::settingsRequested, &m_service, [&settingsCount] {
         ++settingsCount;
     });
@@ -271,6 +280,10 @@ void ControlServiceTest::requestsFireExactlyOnce()
     QObject::connect(&m_service, &ControlService::overlayVisibilityToggleRequested, &m_service, [&toggleCount] {
         ++toggleCount;
     });
+    QObject::connect(&m_service, &ControlService::adjustRequested, &m_service, [&adjustCount, &adjustRequestedState](bool adjusting) {
+        ++adjustCount;
+        adjustRequestedState = adjusting;
+    });
 
     m_settingsAction->trigger();
     QVERIFY(settingsCount == 1);
@@ -280,6 +293,13 @@ void ControlServiceTest::requestsFireExactlyOnce()
     QVERIFY(quitCount == 1);
     m_toggle->trigger();
     QVERIFY(toggleCount == 1);
+
+    // The checkable adjust action reports its new state straight through.
+    QVERIFY(!m_adjust->isChecked());
+    m_adjust->trigger();
+    QVERIFY(adjustCount == 1);
+    QVERIFY(adjustRequestedState);
+    QVERIFY(m_adjust->isChecked());
 }
 
 void ControlServiceTest::overlayVisibilityRelabelsTheToggle()
@@ -291,6 +311,18 @@ void ControlServiceTest::overlayVisibilityRelabelsTheToggle()
     m_service.setOverlayVisible(true);
     QVERIFY(m_toggle->isChecked());
     QVERIFY(m_toggle->text() == QStringLiteral("Hide Lyrics"));
+}
+
+void ControlServiceTest::adjustingFollowsCheckState()
+{
+    // 7b. setAdjusting() drives the adjust action's readable check state, so the
+    //     tray follows the overlay.
+    m_service.setAdjusting(true);
+    QVERIFY(m_adjust->isChecked());
+    m_service.setAdjusting(false);
+    QVERIFY(!m_adjust->isChecked());
+    // The label is fixed; only the check mark follows the state.
+    QVERIFY(m_adjust->text() == QStringLiteral("Adjust position and size"));
 }
 
 void ControlServiceTest::trayToolTipAndSharedMenu()
@@ -318,16 +350,17 @@ void ControlServiceTest::trayToolTipAndSharedMenu()
     QVERIFY(m_controller.lyricOffset() == 0);
     QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: 0"));
 
-    //    The context menu holds exactly the seven documented actions, in order,
-    //    with the three separators between the groups -- and those seven entries
+    //    The context menu holds exactly the eight documented actions, in order,
+    //    with the three separators between the groups -- and those eight entries
     //    are the very QAction instances action() returns, which is what "the
     //    menu and the shortcuts share one action" means. The search window sits
-    //    next to the settings window: they are the two that open one.
+    //    next to the adjust toggle and the settings window: they are the ones
+    //    that open or drive one.
     QMenu *menu = m_tray->contextMenu();
     QVERIFY(menu != nullptr);
     const QList<QAction *> entries = menu ? menu->actions() : QList<QAction *>();
-    QVERIFY(entries.size() == 10);
-    if (entries.size() == 10) {
+    QVERIFY(entries.size() == 11);
+    if (entries.size() == 11) {
         QVERIFY(entries.at(0) == m_toggle);
         QVERIFY(entries.at(1)->isSeparator());
         QVERIFY(entries.at(2) == m_earlier);
@@ -335,9 +368,10 @@ void ControlServiceTest::trayToolTipAndSharedMenu()
         QVERIFY(entries.at(4) == m_reset);
         QVERIFY(entries.at(5)->isSeparator());
         QVERIFY(entries.at(6) == m_searchAction);
-        QVERIFY(entries.at(7) == m_settingsAction);
-        QVERIFY(entries.at(8)->isSeparator());
-        QVERIFY(entries.at(9) == m_quit);
+        QVERIFY(entries.at(7) == m_adjust);
+        QVERIFY(entries.at(8) == m_settingsAction);
+        QVERIFY(entries.at(9)->isSeparator());
+        QVERIFY(entries.at(10) == m_quit);
     }
 }
 

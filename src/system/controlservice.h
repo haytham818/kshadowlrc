@@ -51,6 +51,9 @@ public:
     /*! Follow the overlay's visibility so the show/hide action reads right. */
     void setOverlayVisible(bool visible);
 
+    /*! Follow the overlay's adjusting mode so the adjust action reads right. */
+    void setAdjusting(bool adjusting);
+
 public Q_SLOTS:
     /*! Move the lyric offset one step earlier, clamped. */
     void offsetEarlier();
@@ -66,6 +69,8 @@ Q_SIGNALS:
     void searchRequested();
     /*! The user asked to show/hide the overlay; the parent owns the surface. */
     void overlayVisibilityToggleRequested();
+    /*! The user toggled adjusting mode; the parent owns the surface. */
+    void adjustRequested(bool adjusting);
     /*! The user asked the application to quit. */
     void quitRequested();
 
@@ -81,6 +86,8 @@ private:
     void clampAndSetOffset(qint64 proposedMs);
     /*! Re-label and re-check the toggle action to match m_overlayVisible. */
     void updateToggleAction();
+    /*! Re-check the adjust action to match m_adjusting. */
+    void updateAdjustAction();
     /*! Push the current lyric state and offset into the tray tool tip. */
     void updateToolTip();
 
@@ -89,6 +96,7 @@ private:
     KStatusNotifierItem *m_tray = nullptr;
     QMenu *m_menu = nullptr;
     bool m_overlayVisible = true;
+    bool m_adjusting = false;
 };
 
 /*!

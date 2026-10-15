@@ -3,16 +3,18 @@
 
 #pragma once
 
+#include "platform/overlayplacement.h"
+
+#include <LayerShellQt/Window>
+
+#include <QPoint>
 #include <QQuickView>
 #include <QRegion>
+#include <QSize>
 #include <QString>
 
 QT_BEGIN_NAMESPACE
 class QScreen;
-namespace LayerShellQt
-{
-class Window;
-}
 QT_END_NAMESPACE
 
 namespace kshadowlrc
@@ -22,43 +24,58 @@ namespace kshadowlrc
  * The floating lyrics overlay: a wlr-layer-shell surface that stays above every
  * window with no user-configured window rules.
  *
- * Anchors one screen edge plus both cross-axis edges, so it is stretched along
- * that edge; the free axis follows the lyric content, which QML reports through
- * setContentSize(). It takes no keyboard focus and, by default, no pointer
- * input (clicks pass through to whatever is underneath).
+ * Anchored to a screen edge plus a horizontal anchor (Left/Right edge, or the
+ * centred default), it is positioned by the anchors and margins a Placement
+ * maps to; the free axes follow the lyric content, which QML reports through
+ * setContentSize(). It takes no keyboard focus and, by default, no pointer input
+ * (clicks pass through to whatever is underneath).
+ *
+ * In adjusting mode the surface instead takes pointer input, asks for keyboard
+ * interactivity OnDemand so Esc can arrive, and lets the user drag its position
+ * and font size. That mode is runtime-only: it never reaches the settings file.
  */
 class OverlayWindow : public QQuickView
 {
     Q_OBJECT
+    Q_PROPERTY(bool adjusting READ isAdjusting NOTIFY adjustingChanged)
+    /*! Font size while a font drag is in flight; 0 means "use the setting". */
+    Q_PROPERTY(int adjustingFontSize READ adjustingFontSize NOTIFY adjustingFontSizeChanged)
+    /*! The padding the surface carries on each side while adjusting, in px. */
+    Q_PROPERTY(int adjustPadding READ adjustPadding CONSTANT)
 
 public:
-    enum class Edge {
-        Top,
-        Bottom,
-        Left,
-        Right,
-    };
-    Q_ENUM(Edge)
+    /*! Padding on each side of the text box while adjusting, in logical pixels. */
+    static constexpr int AdjustPadding = 24;
+    /*! The placement box is never smaller than this while adjusting, so an empty
+     *  overlay still has something to grab. */
+    static constexpr QSize MinAdjustBox = QSize(240, 80);
+    /*! How close to the horizontal centre a dragged box snaps to Center, in px. */
+    static constexpr int AdjustMagnetPx = 24;
 
     explicit OverlayWindow(QWindow *parent = nullptr);
 
-    /*! Screen edge the overlay is anchored to. Default: Bottom. */
-    void setEdge(Edge edge);
-    Edge edge() const
+    /*!
+     * The placement: the four anchored values the surface is positioned by.
+     * Setting it applies the anchors at once; during a drag it is updated live
+     * and only the release is reported through placementEdited().
+     */
+    void setPlacement(const Placement &placement);
+    Placement placement() const
     {
-        return m_edge;
+        return m_placement;
     }
 
-    /*! Margin (px) between the overlay and its anchored screen edge. */
-    void setMargin(int margin);
-    int margin() const
+    /*! The base font size a font drag scales from, kept in step with the setting. */
+    void setFontSize(int points);
+    int fontSize() const
     {
-        return m_margin;
+        return m_fontSize;
     }
 
     /*!
      * When true (the default), the surface publishes a 1x1 input region so all
-     * pointer input passes through to the window underneath.
+     * pointer input passes through to the window underneath. Adjusting mode
+     * temporarily overrides it with the full input region.
      */
     void setClickThrough(bool enabled);
     bool clickThrough() const
@@ -66,9 +83,78 @@ public:
         return m_clickThrough;
     }
 
+    /*! True while the overlay is in adjusting mode. Runtime state only. */
+    bool isAdjusting() const
+    {
+        return m_adjusting;
+    }
+
+    /*! The font size a font drag has reached; 0 when no drag has set one. */
+    int adjustingFontSize() const
+    {
+        return m_adjustingFontSize;
+    }
+
+    /*! The padding the surface carries on each side while adjusting, in px. */
+    int adjustPadding() const
+    {
+        return AdjustPadding;
+    }
+
+    /*!
+     * The input region the surface publishes: a 1x1 mask while click-through,
+     * the full (empty) region otherwise. Exposed so it can be asserted without
+     * a compositor.
+     */
+    QRegion inputRegion() const
+    {
+        return m_inputRegion;
+    }
+
+    /*!
+     * The keyboard interactivity the surface requests: None normally, OnDemand
+     * while adjusting so Esc can arrive. Exposed for the same reason.
+     */
+    LayerShellQt::Window::KeyboardInteractivity keyboardInteractivity() const
+    {
+        return m_keyboardInteractivity;
+    }
+
+    /*!
+     * The box the placement maths run on: the text box, raised to MinAdjustBox
+     * while adjusting so an empty overlay is still grabbable. Never the padded
+     * surface, so the padding cannot leak into a stored margin.
+     */
+    QSize adjustmentBox() const;
+
+    /*! Enter adjusting mode: full input, OnDemand keyboard, padded surface. */
+    Q_INVOKABLE void beginAdjusting();
+    /*!
+     * Leave adjusting mode. \p commit false (Esc) discards the in-flight drag and
+     * leaves the settings alone; the caller re-applies the stored settings.
+     */
+    Q_INVOKABLE void endAdjusting(bool commit);
+
+    /*!
+     * Start a drag. \p handlesFont picks the font-size gesture; otherwise it
+     * moves the box. The origin is taken from QCursor::pos() -- global screen
+     * coordinates, never surface-local ones, because the surface follows the
+     * cursor and its own coordinates would barely move.
+     */
+    Q_INVOKABLE void beginDrag(bool handlesFont);
+    /*! Apply the drag to the placement or the font size. */
+    Q_INVOKABLE void updateDrag();
+    /*!
+     * Finish the drag, reporting the result through the *Edited signals. A
+     * gesture that changed nothing reports nothing, so only a real edit reaches
+     * the settings.
+     */
+    Q_INVOKABLE void endDrag();
+
     /*!
      * Called from QML when the lyric layout changes, so the layer surface sizes
-     * itself to the rendered lyrics on its free axis.
+     * itself to the rendered lyrics on its free axis. It always receives the
+     * text's size, never the adjusting padding.
      */
     Q_INVOKABLE void setContentSize(qreal width, qreal height);
 
@@ -95,12 +181,23 @@ public:
     QString activeOutputName() const;
 
 Q_SIGNALS:
+    void adjustingChanged();
+    void adjustingFontSizeChanged();
+    /*! The user released a position drag: the box's new placement. */
+    void placementEdited(int verticalAnchor, int verticalMargin, int horizontalAnchor, int horizontalMargin);
+    /*! The user released a font drag: the new font size in points. */
+    void fontSizeEdited(int points);
+
     void outputNameChanged(const QString &name);
     void activeOutputChanged(const QString &name);
 
 private:
     void applyLayerShell();
     void applyAnchors();
+    /*! Push the desired surface size: the text box, padded while adjusting. */
+    void applyContentSize();
+    /*! Request the current keyboard interactivity on the layer surface. */
+    void applyKeyboardInteractivity();
     /*!
      * Publish the input region (the click-through mask). A \p force re-sends the
      * mask even when it is unchanged, which a rebuilt surface needs: the region
@@ -117,12 +214,29 @@ private:
      * the overlay is mapped; the mapped state is restored.
      */
     void rebuildSurface();
+    /*! Set adjustingFontSize, emitting only when it really changes. */
+    void setAdjustingFontSize(int points);
+    /*! The screen the placement maths run against, or a null size with none. */
+    QSize screenSize() const;
 
     LayerShellQt::Window *m_layerWindow = nullptr;
-    Edge m_edge = Edge::Bottom;
-    int m_margin = 64;
+    Placement m_placement{VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0};
+    int m_fontSize = 32;
     bool m_clickThrough = true;
     QRegion m_inputRegion;
+    LayerShellQt::Window::KeyboardInteractivity m_keyboardInteractivity = LayerShellQt::Window::KeyboardInteractivityNone;
+    QSize m_contentSize = QSize(1, 1);
+
+    // Adjusting mode. None of this reaches the settings file.
+    bool m_adjusting = false;
+    int m_adjustingFontSize = 0;
+    bool m_dragging = false;
+    bool m_dragHandlesFont = false;
+    QPoint m_dragOriginCursor;
+    Placement m_dragStartPlacement{VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0};
+    QSize m_dragBox = QSize(1, 1);
+    int m_dragStartFontSize = 0;
+
     QString m_outputName;
     QScreen *m_screen = nullptr;
 };

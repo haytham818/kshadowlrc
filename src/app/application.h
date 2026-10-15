@@ -3,9 +3,12 @@
 
 #pragma once
 
+#include "platform/overlayplacement.h"
+
 #include <KAboutData>
 
 #include <QApplication>
+#include <QString>
 
 #include <memory>
 
@@ -52,6 +55,8 @@ public:
 private:
     /*! Apply the overlay-owned settings and follow them at runtime. */
     void applyOverlaySettings(const QString &commandLineOutput);
+    /*! The placement the four General settings currently describe. */
+    Placement placementFromSettings() const;
     /*! Apply the playback-owned settings and follow them at runtime. */
     void applyPlaybackSettings();
     /*! Build the tray icon and the global shortcuts and hook them to the app. */
@@ -76,6 +81,12 @@ private:
      * authoritative while the application runs.
      */
     bool m_outputNameFromCommandLine = false;
+    /*! The --output value, kept so a cancelled drag can re-apply the settings
+     *  without clobbering it. */
+    QString m_commandLineOutput;
+    /*! True once the settings-changed connects have been made, so re-applying
+     *  the settings on a cancelled drag does not wire them twice. */
+    bool m_overlaySettingsWired = false;
 };
 
 } // namespace kshadowlrc

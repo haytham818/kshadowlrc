@@ -50,8 +50,8 @@
       <max>10</max>
     </entry>
 
-    <entry name="edge" type="Enum">
-      <label>Screen edge the overlay is anchored to</label>
+    <entry name="verticalAnchor" type="Enum">
+      <label>Screen edge the overlay is anchored to vertically</label>
       <choices>
         <choice name="Top">
           <label>Top edge</label>
@@ -63,9 +63,31 @@
       <default>Bottom</default>
     </entry>
 
-    <entry name="margin" type="Int">
-      <label>Gap between the overlay and the screen edge in logical pixels</label>
+    <entry name="verticalMargin" type="Int">
+      <label>Gap between the overlay and its vertical edge in logical pixels</label>
       <default>64</default>
+      <min>0</min>
+    </entry>
+
+    <entry name="horizontalAnchor" type="Enum">
+      <label>Where the overlay is anchored horizontally</label>
+      <choices>
+        <choice name="Left">
+          <label>Left edge</label>
+        </choice>
+        <choice name="Center">
+          <label>Horizontally centred</label>
+        </choice>
+        <choice name="Right">
+          <label>Right edge</label>
+        </choice>
+      </choices>
+      <default>Center</default>
+    </entry>
+
+    <entry name="horizontalMargin" type="Int">
+      <label>Gap between the overlay and its horizontal edge in logical pixels</label>
+      <default>0</default>
       <min>0</min>
     </entry>
 

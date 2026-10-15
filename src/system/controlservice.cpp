@@ -63,6 +63,11 @@ QString searchId()
     return QStringLiteral("search");
 }
 
+QString adjustId()
+{
+    return QStringLiteral("adjust");
+}
+
 QString quitId()
 {
     return QStringLiteral("quit");
@@ -155,6 +160,15 @@ void ControlService::createActions()
     connect(search, &QAction::triggered, this, &ControlService::searchRequested);
     m_actions.insert(search->objectName(), search);
 
+    // Adjusting the overlay's position and size by mouse drag. Checkable: while
+    // it is on the overlay takes pointer and keyboard input, and the check mark
+    // follows the overlay through setAdjusting().
+    auto *adjust = new QAction(i18nc("@action global shortcut", "Adjust position and size"), this);
+    adjust->setObjectName(adjustId());
+    adjust->setCheckable(true);
+    connect(adjust, &QAction::triggered, this, &ControlService::adjustRequested);
+    m_actions.insert(adjust->objectName(), adjust);
+
     auto *settings = new QAction(i18nc("@action global shortcut", "Configure KShadowLrc…"), this);
     settings->setObjectName(settingsId());
     connect(settings, &QAction::triggered, this, &ControlService::settingsRequested);
@@ -176,6 +190,7 @@ void ControlService::createTray()
     m_menu->addAction(m_actions.value(offsetResetId()));
     m_menu->addSeparator();
     m_menu->addAction(m_actions.value(searchId()));
+    m_menu->addAction(m_actions.value(adjustId()));
     m_menu->addAction(m_actions.value(settingsId()));
     m_menu->addSeparator();
     m_menu->addAction(m_actions.value(quitId()));
@@ -278,6 +293,21 @@ void ControlService::setOverlayVisible(bool visible)
 {
     m_overlayVisible = visible;
     updateToggleAction();
+}
+
+void ControlService::setAdjusting(bool adjusting)
+{
+    m_adjusting = adjusting;
+    updateAdjustAction();
+}
+
+void ControlService::updateAdjustAction()
+{
+    QAction *adjust = m_actions.value(adjustId());
+    if (!adjust) {
+        return;
+    }
+    adjust->setChecked(m_adjusting);
 }
 
 void ControlService::updateToggleAction()

@@ -37,11 +37,12 @@ import org.kde.kirigami as Kirigami
  * built by a Repeater, because a Repeater's delegates are not part of the
  * window's object tree and the window's test counts the controls it finds there.
  *
- * The two enum combos bind their currentIndex straight to the int the KConfigXT
- * compiler generates, because kconfig_compiler emits old-style nested enums with
- * no Q_ENUM and does not register the class as a QML type - QML cannot name
- * KShadowLrcSettings.EnumEdge.Top. Their models are ordered to match the kcfg
- * <choices> blocks and must be kept in step with them.
+ * The three enum combos (which lyric line to show, and the two anchors) bind
+ * their currentIndex straight to the int the KConfigXT compiler generates,
+ * because kconfig_compiler emits old-style nested enums with no Q_ENUM and does
+ * not register the class as a QML type - QML cannot name
+ * KShadowLrcSettings.EnumVerticalAnchor.Top. Their models are ordered to match
+ * the kcfg <choices> blocks and must be kept in step with them.
  *
  * The output picker is the one control with no plain file-backed value to edit:
  * it lists the connected outputs from the `outputs` context property (a
@@ -377,24 +378,87 @@ Kirigami.ApplicationWindow {
                 onValueModified: settings.visibleLines = value
             }
 
+            // Where the overlay sits: each axis has an anchor naming the screen
+            // edge (or the centre) it holds on to, and a margin that is the gap
+            // to that edge. The box is only ever as large as the lyrics, so it
+            // hangs from whichever edge it holds on to and grows away from it as
+            // the text grows. The margins only mean something next to their own
+            // anchor, so each one sits under the anchor it belongs to and says so.
             QQC2.ComboBox {
-                id: edgeField
-                Kirigami.FormData.label: i18n("Screen edge:")
+                id: verticalAnchorField
+
+                objectName: "verticalAnchorField"
+                Kirigami.FormData.label: i18n("Vertical anchor:")
                 // The model order must match the <choices> order in
                 // src/config/kshadowlrcsettings.kcfg exactly: 0 = Top, 1 = Bottom.
                 model: [i18n("Top"), i18n("Bottom")]
-                currentIndex: settings.edge
-                onActivated: settings.edge = currentIndex
+                currentIndex: settings.verticalAnchor
+                onActivated: settings.verticalAnchor = currentIndex
             }
 
-            QQC2.SpinBox {
-                id: marginField
-                Kirigami.FormData.label: i18n("Edge margin:")
-                from: 0
-                to: 5000
-                value: settings.margin
-                textFromValue: (value) => i18n("%1 px", value)
-                onValueModified: settings.margin = value
+            ColumnLayout {
+                Kirigami.FormData.label: i18n("Vertical margin:")
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 15
+                spacing: Math.round(Kirigami.Units.smallSpacing / 2)
+
+                QQC2.SpinBox {
+                    id: verticalMarginField
+
+                    objectName: "verticalMarginField"
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 5000
+                    value: settings.verticalMargin
+                    textFromValue: (value) => i18n("%1 px", value)
+                    onValueModified: settings.verticalMargin = value
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: i18n("The gap to the screen edge named by the vertical anchor; on its own it does nothing.")
+                }
+            }
+
+            QQC2.ComboBox {
+                id: horizontalAnchorField
+
+                objectName: "horizontalAnchorField"
+                Kirigami.FormData.label: i18n("Horizontal anchor:")
+                // The model order must match the <choices> order in
+                // src/config/kshadowlrcsettings.kcfg exactly:
+                // 0 = Left, 1 = Center, 2 = Right.
+                model: [i18n("Left"), i18n("Center"), i18n("Right")]
+                currentIndex: settings.horizontalAnchor
+                onActivated: settings.horizontalAnchor = currentIndex
+            }
+
+            ColumnLayout {
+                Kirigami.FormData.label: i18n("Horizontal margin:")
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 15
+                spacing: Math.round(Kirigami.Units.smallSpacing / 2)
+
+                QQC2.SpinBox {
+                    id: horizontalMarginField
+
+                    objectName: "horizontalMarginField"
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 5000
+                    value: settings.horizontalMargin
+                    textFromValue: (value) => i18n("%1 px", value)
+                    onValueModified: settings.horizontalMargin = value
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: i18n("The gap to the screen edge named by the horizontal anchor; on its own it does nothing.")
+                }
             }
 
             QQC2.Switch {

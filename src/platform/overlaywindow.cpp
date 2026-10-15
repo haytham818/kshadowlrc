@@ -8,8 +8,10 @@
 
 #include <LayerShellQt/Window>
 
+#include <QCursor>
 #include <QGuiApplication>
 #include <QLoggingCategory>
+#include <QPoint>
 #include <QScreen>
 #include <qpa/qplatformnativeinterface.h>
 
@@ -182,19 +184,28 @@ void OverlayWindow::applyLayerShell()
     m_layerWindow->setScope(QStringLiteral("dock"));
 
     // No keyboard focus: the overlay never steals typing from the active window.
-    m_layerWindow->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
+    // Adjusting mode raises this to OnDemand; see beginAdjusting().
+    applyKeyboardInteractivity();
     // Reserve no screen space, so maximized windows are unaffected.
     m_layerWindow->setExclusiveZone(0);
     // Keep the surface alive across output changes.
     m_layerWindow->setCloseOnDismissed(false);
 }
 
-void OverlayWindow::setEdge(Edge edge)
+void OverlayWindow::applyKeyboardInteractivity()
 {
-    if (m_edge == edge) {
+    if (!m_layerWindow) {
         return;
     }
-    m_edge = edge;
+    m_layerWindow->setKeyboardInteractivity(m_keyboardInteractivity);
+}
+
+void OverlayWindow::setPlacement(const Placement &placement)
+{
+    if (m_placement == placement) {
+        return;
+    }
+    m_placement = placement;
     applyAnchors();
     if (isVisible()) {
         // Pulse a frame so the new anchor set is committed promptly.
@@ -202,16 +213,24 @@ void OverlayWindow::setEdge(Edge edge)
     }
 }
 
-void OverlayWindow::setMargin(int margin)
+void OverlayWindow::setFontSize(int points)
 {
-    if (m_margin == margin) {
-        return;
+    m_fontSize = points;
+}
+
+QSize OverlayWindow::adjustmentBox() const
+{
+    if (!m_adjusting) {
+        return m_contentSize;
     }
-    m_margin = margin;
-    applyAnchors();
-    if (isVisible()) {
-        update();
-    }
+    // With nothing playing the content size is 0 and the surface would collapse
+    // to something with nothing to grab, so adjusting works on a minimum box.
+    return QSize(qMax(m_contentSize.width(), MinAdjustBox.width()), qMax(m_contentSize.height(), MinAdjustBox.height()));
+}
+
+QSize OverlayWindow::screenSize() const
+{
+    return m_screen ? m_screen->geometry().size() : QSize();
 }
 
 void OverlayWindow::setClickThrough(bool enabled)
@@ -223,46 +242,149 @@ void OverlayWindow::setClickThrough(bool enabled)
     applyInputRegion();
 }
 
+void OverlayWindow::beginAdjusting()
+{
+    if (m_adjusting) {
+        return;
+    }
+    m_adjusting = true;
+
+    // Take pointer input so a frame and its handles are grabbable, and ask for
+    // the keyboard on demand so Esc can arrive. Both override the configured
+    // values for as long as adjusting lasts.
+    applyInputRegion();
+    m_keyboardInteractivity = LayerShellQt::Window::KeyboardInteractivityOnDemand;
+    applyKeyboardInteractivity();
+
+    // The surface grows by the padding on each side while the placement still
+    // describes the text box; re-apply both so the box stays put.
+    applyContentSize();
+    applyAnchors();
+
+    Q_EMIT adjustingChanged();
+    qCDebug(lcOverlay) << "adjusting mode entered";
+}
+
+void OverlayWindow::endAdjusting(bool commit)
+{
+    if (!m_adjusting) {
+        return;
+    }
+
+    if (m_dragging) {
+        if (commit) {
+            endDrag();
+        } else {
+            // Esc: drop the in-flight drag without reporting it. The settings
+            // were never touched, so the caller re-applies the stored values.
+            m_dragging = false;
+        }
+    }
+
+    m_adjusting = false;
+    setAdjustingFontSize(0);
+    m_keyboardInteractivity = LayerShellQt::Window::KeyboardInteractivityNone;
+    applyKeyboardInteractivity();
+
+    // Back to the configured click-through, the unpadded size and the stored
+    // placement's margins.
+    applyInputRegion();
+    applyContentSize();
+    applyAnchors();
+
+    Q_EMIT adjustingChanged();
+    qCDebug(lcOverlay) << "adjusting mode left, committed" << commit;
+}
+
+void OverlayWindow::beginDrag(bool handlesFont)
+{
+    if (!m_adjusting || m_dragging) {
+        return;
+    }
+
+    m_dragging = true;
+    m_dragHandlesFont = handlesFont;
+    // Global screen coordinates: the surface follows the cursor, so its own
+    // local coordinates would barely move and the drag would stall or jitter.
+    m_dragOriginCursor = QCursor::pos();
+    // The anchor at grab time fixes the font-drag direction and is the frame of
+    // reference the position gesture is compared against on release.
+    m_dragStartPlacement = m_placement;
+
+    if (handlesFont) {
+        m_dragStartFontSize = m_adjustingFontSize > 0 ? m_adjustingFontSize : m_fontSize;
+    } else {
+        // The box size is captured once: while the lyric text keeps updating the
+        // box changes size, and an anchored box grows from its anchored edge, so
+        // the size at grab time is what the placement maths must use.
+        m_dragBox = adjustmentBox();
+    }
+}
+
+void OverlayWindow::updateDrag()
+{
+    if (!m_dragging) {
+        return;
+    }
+
+    const QPointF delta = QCursor::pos() - m_dragOriginCursor;
+
+    if (m_dragHandlesFont) {
+        // The anchor as it was at grab time decides the direction, so a live drag
+        // cannot flip its own sign under the pointer.
+        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, delta, m_dragStartPlacement.vertical));
+        return;
+    }
+
+    const QSize screen = screenSize();
+    const QPoint topLeft = placementBoxTopLeft(m_dragStartPlacement, m_dragBox, screen) + QPoint(qRound(delta.x()), qRound(delta.y()));
+    // Clamped so the box can never be dragged half off-screen.
+    setPlacement(clampToScreen(placementFor(topLeft, m_dragBox, screen, AdjustMagnetPx), m_dragBox, screen));
+}
+
+void OverlayWindow::endDrag()
+{
+    if (!m_dragging) {
+        return;
+    }
+    m_dragging = false;
+
+    // The release is the only moment anything reaches the settings, so no disk
+    // write happens while the pointer is moving -- and a gesture that changed
+    // nothing reports nothing, so only a real edit reaches the settings.
+    if (m_dragHandlesFont) {
+        const int points = m_adjustingFontSize > 0 ? m_adjustingFontSize : m_dragStartFontSize;
+        if (points != m_dragStartFontSize) {
+            Q_EMIT fontSizeEdited(points);
+        }
+    } else if (m_placement != m_dragStartPlacement) {
+        Q_EMIT placementEdited(static_cast<int>(m_placement.vertical),
+                               m_placement.verticalMargin,
+                               static_cast<int>(m_placement.horizontal),
+                               m_placement.horizontalMargin);
+    }
+}
+
+void OverlayWindow::setAdjustingFontSize(int points)
+{
+    if (m_adjustingFontSize == points) {
+        return;
+    }
+    m_adjustingFontSize = points;
+    Q_EMIT adjustingFontSizeChanged();
+}
+
 void OverlayWindow::applyAnchors()
 {
     if (!m_layerWindow) {
         return;
     }
 
-    // LayerShellQt declares the Anchors flags but no operator| for them, so the
-    // bits are set with setFlag().
-    LayerShellQt::Window::Anchors anchors;
-    QMargins margins;
-
-    switch (m_edge) {
-    case Edge::Bottom:
-        anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-        anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-        anchors.setFlag(LayerShellQt::Window::AnchorRight);
-        margins.setBottom(m_margin);
-        break;
-    case Edge::Top:
-        anchors.setFlag(LayerShellQt::Window::AnchorTop);
-        anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-        anchors.setFlag(LayerShellQt::Window::AnchorRight);
-        margins.setTop(m_margin);
-        break;
-    case Edge::Left:
-        anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-        anchors.setFlag(LayerShellQt::Window::AnchorTop);
-        anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-        margins.setLeft(m_margin);
-        break;
-    case Edge::Right:
-        anchors.setFlag(LayerShellQt::Window::AnchorRight);
-        anchors.setFlag(LayerShellQt::Window::AnchorTop);
-        anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-        margins.setRight(m_margin);
-        break;
-    }
-
-    m_layerWindow->setAnchors(anchors);
-    m_layerWindow->setMargins(margins);
+    // While adjusting the surface is padded, so its margins are the text box's
+    // minus the padding; the stored placement is left describing the text box.
+    const PlacementAnchors state = anchorsFor(m_placement, m_adjusting ? AdjustPadding : 0);
+    m_layerWindow->setAnchors(state.anchors);
+    m_layerWindow->setMargins(state.margins);
 }
 
 void OverlayWindow::applyInputRegion(bool force)
@@ -271,7 +393,11 @@ void OverlayWindow::applyInputRegion(bool force)
     // ALL input — the opposite of click-through. So "no input" is expressed as a
     // 1x1 region in the corner, never as an empty one. Conversely, "full input"
     // is exactly the cleared (empty) mask.
-    const QRegion region = m_clickThrough ? QRegion(0, 0, 1, 1) : QRegion();
+    //
+    // Adjusting temporarily overrides the click-through setting with full input;
+    // between drags and after exit the setting is back in charge.
+    const bool clickThroughNow = m_clickThrough && !m_adjusting;
+    const QRegion region = clickThroughNow ? QRegion(0, 0, 1, 1) : QRegion();
 
     if (!force && region == m_inputRegion) {
         return;
@@ -279,7 +405,7 @@ void OverlayWindow::applyInputRegion(bool force)
 
     setMask(region);
     m_inputRegion = region;
-    qCDebug(lcOverlay) << (m_clickThrough ? "input region: 1x1 (click-through)" : "input region: full surface");
+    qCDebug(lcOverlay) << (clickThroughNow ? "input region: 1x1 (click-through)" : "input region: full surface");
     commitSurface();
 }
 
@@ -306,7 +432,18 @@ void OverlayWindow::commitSurface()
 
 void OverlayWindow::setContentSize(qreal width, qreal height)
 {
-    const QSize size(qMax(1, static_cast<int>(std::ceil(width))), qMax(1, static_cast<int>(std::ceil(height))));
+    // Always the text's size, never the adjusting padding: callers describe the
+    // text box, and applyContentSize() adds the padding to the surface itself.
+    m_contentSize = QSize(qMax(1, static_cast<int>(std::ceil(width))), qMax(1, static_cast<int>(std::ceil(height))));
+    applyContentSize();
+}
+
+void OverlayWindow::applyContentSize()
+{
+    QSize size = adjustmentBox();
+    if (m_adjusting) {
+        size += QSize(2 * AdjustPadding, 2 * AdjustPadding);
+    }
 
     if (m_layerWindow) {
         // The anchored (stretched) axis ignores this; only the free axis follows

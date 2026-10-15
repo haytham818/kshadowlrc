@@ -84,16 +84,38 @@ KAboutData Application::makeAboutData()
     return aboutData;
 }
 
-/*! Maps a settings edge enum to the overlay's; only Top and Bottom exist. */
-static OverlayWindow::Edge overlayEdge(int edge)
+/*! Maps the four placement settings to the overlay's pure Placement type. */
+Placement Application::placementFromSettings() const
 {
-    return edge == KShadowLrcSettings::EnumEdge::Top ? OverlayWindow::Edge::Top : OverlayWindow::Edge::Bottom;
+    Placement placement;
+    placement.vertical = m_settings->verticalAnchor() == KShadowLrcSettings::EnumVerticalAnchor::Top ? VerticalAnchor::Top : VerticalAnchor::Bottom;
+    placement.verticalMargin = m_settings->verticalMargin();
+
+    switch (m_settings->horizontalAnchor()) {
+    case KShadowLrcSettings::EnumHorizontalAnchor::Left:
+        placement.horizontal = HorizontalAnchor::Left;
+        break;
+    case KShadowLrcSettings::EnumHorizontalAnchor::Right:
+        placement.horizontal = HorizontalAnchor::Right;
+        break;
+    case KShadowLrcSettings::EnumHorizontalAnchor::Center:
+        placement.horizontal = HorizontalAnchor::Center;
+        break;
+    }
+    placement.horizontalMargin = m_settings->horizontalMargin();
+
+    return placement;
 }
 
 void Application::applyOverlaySettings(const QString &commandLineOutput)
 {
-    m_overlay->setEdge(overlayEdge(m_settings->edge()));
-    m_overlay->setMargin(m_settings->margin());
+    m_commandLineOutput = commandLineOutput;
+
+    // The four placement values, the font size the font drag scales from, and the
+    // click-through setting. Idempotent: re-applying them restores whatever a
+    // cancelled drag changed.
+    m_overlay->setPlacement(placementFromSettings());
+    m_overlay->setFontSize(m_settings->fontSize());
     m_overlay->setClickThrough(m_settings->clickThrough());
 
     // The current value decides the initial output; the settings window's picker
@@ -103,25 +125,45 @@ void Application::applyOverlaySettings(const QString &commandLineOutput)
     m_outputNameFromCommandLine = !commandLineOutput.isEmpty();
     m_overlay->setOutputName(m_outputNameFromCommandLine ? commandLineOutput : m_settings->outputName());
 
-    connect(m_settings, &KShadowLrcSettings::edgeChanged, this, [this] {
-        m_overlay->setEdge(overlayEdge(m_settings->edge()));
-        qCInfo(lcApp) << "settings changed: edge ->" << m_settings->edge();
-    });
-    connect(m_settings, &KShadowLrcSettings::marginChanged, this, [this] {
-        m_overlay->setMargin(m_settings->margin());
-        qCInfo(lcApp) << "settings changed: margin ->" << m_settings->margin();
-    });
-    connect(m_settings, &KShadowLrcSettings::clickThroughChanged, this, [this] {
-        m_overlay->setClickThrough(m_settings->clickThrough());
-        qCInfo(lcApp) << "settings changed: clickThrough ->" << m_settings->clickThrough();
-    });
-    connect(m_settings, &KShadowLrcSettings::outputNameChanged, this, [this] {
-        m_overlay->setOutputName(m_settings->outputName());
-        qCInfo(lcApp) << "settings changed: outputName ->" << m_settings->outputName();
-    });
+    // Wire the live changes once: a later re-application on a cancelled drag must
+    // not connect them a second time.
+    if (!m_overlaySettingsWired) {
+        m_overlaySettingsWired = true;
 
-    qCInfo(lcApp) << "overlay: edge=" << static_cast<int>(m_overlay->edge()) << "margin=" << m_overlay->margin() << "clickThrough=" << m_overlay->clickThrough()
-                  << "output=" << (m_outputNameFromCommandLine ? commandLineOutput : m_settings->outputName())
+        connect(m_settings, &KShadowLrcSettings::verticalAnchorChanged, this, [this] {
+            m_overlay->setPlacement(placementFromSettings());
+            qCInfo(lcApp) << "settings changed: verticalAnchor ->" << m_settings->verticalAnchor();
+        });
+        connect(m_settings, &KShadowLrcSettings::verticalMarginChanged, this, [this] {
+            m_overlay->setPlacement(placementFromSettings());
+            qCInfo(lcApp) << "settings changed: verticalMargin ->" << m_settings->verticalMargin();
+        });
+        connect(m_settings, &KShadowLrcSettings::horizontalAnchorChanged, this, [this] {
+            m_overlay->setPlacement(placementFromSettings());
+            qCInfo(lcApp) << "settings changed: horizontalAnchor ->" << m_settings->horizontalAnchor();
+        });
+        connect(m_settings, &KShadowLrcSettings::horizontalMarginChanged, this, [this] {
+            m_overlay->setPlacement(placementFromSettings());
+            qCInfo(lcApp) << "settings changed: horizontalMargin ->" << m_settings->horizontalMargin();
+        });
+        connect(m_settings, &KShadowLrcSettings::fontSizeChanged, this, [this] {
+            m_overlay->setFontSize(m_settings->fontSize());
+            qCInfo(lcApp) << "settings changed: fontSize ->" << m_settings->fontSize();
+        });
+        connect(m_settings, &KShadowLrcSettings::clickThroughChanged, this, [this] {
+            m_overlay->setClickThrough(m_settings->clickThrough());
+            qCInfo(lcApp) << "settings changed: clickThrough ->" << m_settings->clickThrough();
+        });
+        connect(m_settings, &KShadowLrcSettings::outputNameChanged, this, [this] {
+            m_overlay->setOutputName(m_settings->outputName());
+            qCInfo(lcApp) << "settings changed: outputName ->" << m_settings->outputName();
+        });
+    }
+
+    const Placement placement = m_overlay->placement();
+    qCInfo(lcApp) << "overlay: verticalAnchor=" << static_cast<int>(placement.vertical) << "verticalMargin=" << placement.verticalMargin
+                  << "horizontalAnchor=" << static_cast<int>(placement.horizontal) << "horizontalMargin=" << placement.horizontalMargin
+                  << "clickThrough=" << m_overlay->clickThrough() << "output=" << (m_outputNameFromCommandLine ? commandLineOutput : m_settings->outputName())
                   << (m_outputNameFromCommandLine ? "(from command line)" : "(from settings)");
 }
 
@@ -158,7 +200,50 @@ void Application::createControlService()
         QCoreApplication::quit();
     });
 
+    // The only place a drag reaches the settings: the overlay reports a released
+    // drag, and the values are written here. The overlay's enum order matches the
+    // settings', so the ints pass straight through.
+    connect(m_overlay.get(), &OverlayWindow::placementEdited, this, [this](int verticalAnchor, int verticalMargin, int horizontalAnchor, int horizontalMargin) {
+        // The overlay's enum order matches the settings', so the ints pass
+        // straight through.
+        m_settings->setVerticalAnchor(verticalAnchor);
+        m_settings->setVerticalMargin(verticalMargin);
+        m_settings->setHorizontalAnchor(horizontalAnchor);
+        m_settings->setHorizontalMargin(horizontalMargin);
+        qCInfo(lcApp) << "placement edited:" << verticalAnchor << verticalMargin << horizontalAnchor << horizontalMargin;
+    });
+    connect(m_overlay.get(), &OverlayWindow::fontSizeEdited, this, [this](int points) {
+        m_settings->setFontSize(points);
+        qCInfo(lcApp) << "font size edited:" << points;
+    });
+
+    // Entering adjusting mode with the overlay hidden must show it, or there is
+    // nothing to drag. Unchecking the action (or Esc in the overlay) cancels.
+    connect(m_controlService.get(), &ControlService::adjustRequested, this, [this](bool adjusting) {
+        if (adjusting) {
+            if (!m_overlay->isVisible()) {
+                m_overlay->setVisible(true);
+                m_controlService->setOverlayVisible(true);
+            }
+            m_overlay->beginAdjusting();
+        } else {
+            m_overlay->endAdjusting(false);
+        }
+        qCInfo(lcApp) << "adjust requested:" << adjusting;
+    });
+
+    // The action's check mark follows the overlay, whichever way adjusting starts
+    // or stops. Leaving it re-applies the stored settings, so a drag cancelled
+    // with Esc is restored.
+    connect(m_overlay.get(), &OverlayWindow::adjustingChanged, this, [this] {
+        m_controlService->setAdjusting(m_overlay->isAdjusting());
+        if (!m_overlay->isAdjusting()) {
+            applyOverlaySettings(m_commandLineOutput);
+        }
+    });
+
     m_controlService->setOverlayVisible(m_overlay->isVisible());
+    m_controlService->setAdjusting(m_overlay->isAdjusting());
 }
 
 void Application::openSettingsWindow()
