@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 KShadowLrc Contributors
 
-// The ignored-players repeater's delegate calls back into the root's helpers,
-// so the component must be bound to the context it is declared in.
+// The ignored-players repeaters' delegates call back into the root's helpers,
+// so the components must be bound to the context they are declared in.
 pragma ComponentBehavior: Bound
 
 import QtQuick
@@ -36,6 +36,18 @@ import org.kde.kirigami as Kirigami
  * into settings.sourceOrder. The rows are written out one by one rather than
  * built by a Repeater, because a Repeater's delegates are not part of the
  * window's object tree and the window's test counts the controls it finds there.
+ *
+ * The ignored-players section is built from the `playerTracker` context property
+ * the host injects, which reports every MPRIS player it can see: the bus name,
+ * the player's own label, and the ignore entry that catches it, if any. Each row
+ * is one player and writes only back into settings.ignoredPlayers: switching a
+ * player on appends its full bus name, switching it off drops that name, and a
+ * player caught by a wildcard or prefix rule is shown without a switch at all,
+ * because there is no entry for that player alone to turn off. Entries that
+ * answer to no running player stay listed underneath - a hand-written rule with
+ * a Remove button, a player that has stopped with a switch - so both can be
+ * dropped. Opening the window asks the tracker for a fresh scan, or the list
+ * would be whatever it saw up to ten seconds ago.
  *
  * The enum combo (which lyric line to show) binds its currentIndex straight to
  * the int the KConfigXT compiler generates, because kconfig_compiler emits
@@ -105,33 +117,59 @@ Kirigami.ApplicationWindow {
         return settings.outputName.length > 0 && outputs.names.indexOf(settings.outputName) === -1
     }
 
+    // ---- Ignored players ----------------------------------------------------
+
+    // The host hands the window the player tracker, as the `playerTracker`
+    // context property. A bare engine (the QML test) has none, so the section
+    // then lists the saved entries alone rather than reporting a warning.
+    readonly property bool hasPlayerTracker: typeof playerTracker !== "undefined"
+
+    // What the tracker can see right now, in its own order (by label). Reading
+    // the property here is what keeps the rows live: the tracker notifies
+    // knownPlayersChanged whenever it re-scans.
+    readonly property var knownPlayers: root.hasPlayerTracker ? playerTracker.knownPlayers : []
+
+    // The saved entries no visible player answers to: a player that is not
+    // running right now, or a rule written by hand. Listed under the running
+    // players so either can be taken off the list.
+    function storedIgnoredPlayers() {
+        const running = root.knownPlayers.map(entry => entry.name)
+        return settings.ignoredPlayers.filter(entry => running.indexOf(entry) === -1)
+    }
+
+    // A saved entry with a * or ? is a glob over the whole bus name, as the
+    // kcfg entry says; anything else names one player.
+    function isPlayerPattern(entry) {
+        return entry.indexOf("*") !== -1 || entry.indexOf("?") !== -1
+    }
+
     // The ignored-players list is a StringList property: read it, edit the copy,
-    // write the whole list back so the object persists it.
-    function addIgnoredPlayer(name) {
-        const trimmed = name.trim()
-        if (trimmed.length === 0) {
-            return
-        }
+    // write the whole list back so the object persists it. Every control in the
+    // section goes through here, so the file holds exactly the entries that were
+    // chosen and nothing else. A player is always written as its full bus name,
+    // which is what an ignore entry matches.
+    function setPlayerIgnored(name, ignored) {
         const players = settings.ignoredPlayers.slice()
-        if (players.indexOf(trimmed) !== -1) {
+        const index = players.indexOf(name)
+        if (ignored) {
+            if (index !== -1) {
+                return
+            }
+            players.push(name)
+        } else if (index !== -1) {
+            players.splice(index, 1)
+        } else {
             return
         }
-        players.push(trimmed)
         settings.ignoredPlayers = players
     }
 
-    function removeIgnoredPlayer(playerIndex) {
-        const players = settings.ignoredPlayers.slice()
-        if (playerIndex < 0 || playerIndex >= players.length) {
-            return
+    // A just-opened window must not list what was playing a scan ago; the
+    // tracker re-scans on a timer, so ask it for one now.
+    Component.onCompleted: {
+        if (root.hasPlayerTracker) {
+            playerTracker.refreshKnownPlayers()
         }
-        players.splice(playerIndex, 1)
-        settings.ignoredPlayers = players
-    }
-
-    function submitNewPlayer() {
-        root.addIgnoredPlayer(newPlayerField.text)
-        newPlayerField.clear()
     }
 
     // ---- Lyric sources ------------------------------------------------------
@@ -611,56 +649,199 @@ Kirigami.ApplicationWindow {
 
             ColumnLayout {
                 Kirigami.FormData.label: i18n("Ignored players:")
-                Layout.preferredWidth: Kirigami.Units.gridUnit * 20
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 24
                 spacing: Kirigami.Units.smallSpacing
 
+                // Nothing to list at all: say so instead of leaving a heading
+                // with nothing under it.
                 QQC2.Label {
+                    objectName: "noPlayersLabel"
                     Layout.fillWidth: true
-                    visible: settings.ignoredPlayers.length === 0
+                    visible: root.knownPlayers.length === 0 && settings.ignoredPlayers.length === 0
+                    wrapMode: Text.WordWrap
                     font: Kirigami.Theme.smallFont
                     opacity: 0.7
-                    text: i18n("No players are ignored.")
+                    text: i18n("No MPRIS player is running right now.")
                 }
 
+                // Every player the tracker can see, ignored or not, sorted by
+                // label in C++. One row per player, and the switch is the whole
+                // edit: on means the overlay ignores that player.
                 Repeater {
-                    model: settings.ignoredPlayers
+                    id: runningPlayerRepeater
+                    objectName: "runningPlayerRepeater"
+                    model: root.knownPlayers
 
                     delegate: RowLayout {
-                        id: ignoredRow
-                        required property string modelData
-                        required property int index
+                        id: runningPlayerRow
+                        objectName: "runningPlayerRow"
+                        required property var modelData
                         Layout.fillWidth: true
                         spacing: Kirigami.Units.smallSpacing
 
-                        QQC2.Label {
+                        // `rule` is the ignore entry that catches this player,
+                        // empty when none does. Only an entry naming this player
+                        // and nothing else can be turned off without changing
+                        // what happens to other players.
+                        readonly property bool ignoredByRule: runningPlayerRow.modelData.rule.length > 0
+                        readonly property bool ignoredByName: runningPlayerRow.modelData.rule === runningPlayerRow.modelData.name
+
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            text: ignoredRow.modelData
-                            elide: Text.ElideMiddle
+                            spacing: 0
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+
+                                QQC2.Label {
+                                    Layout.fillWidth: true
+                                    text: runningPlayerRow.modelData.label
+                                    elide: Text.ElideRight
+                                }
+
+                                // Which player is feeding the overlay this
+                                // moment. Small and dim, an aside to the name
+                                // rather than a badge of its own.
+                                QQC2.Label {
+                                    objectName: "runningPlayerActive"
+                                    Layout.alignment: Qt.AlignVCenter
+                                    visible: runningPlayerRow.modelData.active
+                                    text: i18n("Following")
+                                    font: Kirigami.Theme.smallFont
+                                    opacity: 0.7
+                                }
+                            }
+
+                            // The bus name under the label, so what is listed
+                            // here can be checked against a hand-written entry
+                            // in the settings file.
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: runningPlayerRow.modelData.name
+                                elide: Text.ElideMiddle
+                                font: Kirigami.Theme.smallFont
+                                opacity: 0.7
+                            }
+
+                            // Caught by a wildcard, a prefix or a bus-name
+                            // segment: there is no entry for this player alone, so
+                            // a switch could only do nothing, or stop ignoring
+                            // others as well. Say which rule catches it instead,
+                            // and leave the row without a switch.
+                            QQC2.Label {
+                                objectName: "runningPlayerRule"
+                                Layout.fillWidth: true
+                                visible: runningPlayerRow.ignoredByRule && !runningPlayerRow.ignoredByName
+                                text: i18n("Ignored by the rule “%1”", runningPlayerRow.modelData.rule)
+                                elide: Text.ElideMiddle
+                                font: Kirigami.Theme.smallFont
+                                opacity: 0.7
+                            }
                         }
 
-                        QQC2.Button {
-                            text: i18n("Remove")
-                            onClicked: root.removeIgnoredPlayer(ignoredRow.index)
+                        // Only where a switch can mean something: off (ignored)
+                        // and on (not ignored) both map to one entry.
+                        Loader {
+                            Layout.alignment: Qt.AlignVCenter
+                            active: !runningPlayerRow.ignoredByRule || runningPlayerRow.ignoredByName
+                            sourceComponent: Component {
+                                QQC2.Switch {
+                                    objectName: "runningPlayerSwitch"
+                                    // A label-free switch still has to say what it
+                                    // does: its own text would be read out as the
+                                    // switch's label and shown next to it.
+                                    Accessible.name: i18n("Ignore %1", runningPlayerRow.modelData.label)
+                                    checked: runningPlayerRow.ignoredByName
+                                    onToggled: root.setPlayerIgnored(runningPlayerRow.modelData.name, checked)
+
+                                    // Flipping the switch assigns checked itself,
+                                    // which drops the binding above; a row the
+                                    // tracker later re-uses for another player, or
+                                    // an entry edited elsewhere, is followed
+                                    // explicitly instead, as the output row does.
+                                    Connections {
+                                        target: runningPlayerRow
+
+                                        function onIgnoredByNameChanged() {
+                                            checked = runningPlayerRow.ignoredByName
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Kirigami.Units.smallSpacing
+                // Entries no running player answers to. A hand-written rule can
+                // only be removed; a player that has stopped keeps its switch, so
+                // ignoring it can be undone without starting it again.
+                Repeater {
+                    id: storedPlayerRepeater
+                    objectName: "storedPlayerRepeater"
+                    model: root.storedIgnoredPlayers()
 
-                    QQC2.TextField {
-                        id: newPlayerField
+                    delegate: RowLayout {
+                        id: storedPlayerRow
+                        objectName: "storedPlayerRow"
+                        required property string modelData
                         Layout.fillWidth: true
-                        placeholderText: i18n("org.mpris.MediaPlayer2.example")
-                        onAccepted: root.submitNewPlayer()
-                    }
+                        spacing: Kirigami.Units.smallSpacing
 
-                    QQC2.Button {
-                        text: i18n("Add")
-                        enabled: newPlayerField.text.trim().length > 0
-                        onClicked: root.submitNewPlayer()
+                        readonly property bool isPattern: root.isPlayerPattern(storedPlayerRow.modelData)
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                text: storedPlayerRow.modelData
+                                elide: Text.ElideMiddle
+                            }
+
+                            QQC2.Label {
+                                visible: !storedPlayerRow.isPattern
+                                text: i18n("Not running")
+                                font: Kirigami.Theme.smallFont
+                                opacity: 0.7
+                            }
+                        }
+
+                        Loader {
+                            Layout.alignment: Qt.AlignVCenter
+                            active: storedPlayerRow.isPattern
+                            sourceComponent: Component {
+                                QQC2.Button {
+                                    objectName: "storedPlayerRemove"
+                                    Accessible.name: i18n("Remove the rule %1", storedPlayerRow.modelData)
+                                    text: i18n("Remove")
+                                    onClicked: root.setPlayerIgnored(storedPlayerRow.modelData, false)
+                                }
+                            }
+                        }
+
+                        Loader {
+                            Layout.alignment: Qt.AlignVCenter
+                            active: !storedPlayerRow.isPattern
+                            sourceComponent: Component {
+                                QQC2.Switch {
+                                    objectName: "storedPlayerSwitch"
+                                    Accessible.name: i18n("Ignore %1", storedPlayerRow.modelData)
+                                    checked: true
+                                    onToggled: root.setPlayerIgnored(storedPlayerRow.modelData, false)
+                                }
+                            }
+                        }
                     }
+                }
+
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font: Kirigami.Theme.smallFont
+                    opacity: 0.7
+                    text: i18n("A switched-on player is skipped by the overlay. To ignore one that is not in the list, add its bus name or a pattern to the settings file by hand.")
                 }
             }
 

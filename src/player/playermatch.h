@@ -77,6 +77,24 @@ inline bool ignoredPatternMatches(const QString &pattern, const QString &busName
 }
 
 /*!
+ * The entry of `patterns` that matches `busName`, or an empty string when none
+ * does. The matching rules are exactly those of isIgnoredPlayer(), which is
+ * written in terms of this; a matching entry is never the empty string, because
+ * an empty entry matches nothing.
+ *
+ * The settings window uses this to say which rule a player is caught by.
+ */
+inline QString matchingIgnorePattern(const QStringList &patterns, const QString &busName)
+{
+    for (const QString &pattern : patterns) {
+        if (ignoredPatternMatches(pattern, busName)) {
+            return pattern;
+        }
+    }
+    return QString();
+}
+
+/*!
  * Whether `busName` is ignored by any entry of `patterns`.
  *
  * An empty list ignores nothing: that is a legitimate configuration, not an
@@ -84,12 +102,7 @@ inline bool ignoredPatternMatches(const QString &pattern, const QString &busName
  */
 inline bool isIgnoredPlayer(const QStringList &patterns, const QString &busName)
 {
-    for (const QString &pattern : patterns) {
-        if (ignoredPatternMatches(pattern, busName)) {
-            return true;
-        }
-    }
-    return false;
+    return !matchingIgnorePattern(patterns, busName).isEmpty();
 }
 
 } // namespace kshadowlrc

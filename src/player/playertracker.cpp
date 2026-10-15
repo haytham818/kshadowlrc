@@ -15,7 +15,9 @@
 #include <QSet>
 #include <QTimer>
 #include <QVariant>
+#include <QVariantList>
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
@@ -68,12 +70,21 @@ const QStringList kDefaultIgnoredPlayers = {
     QStringLiteral("org.mpris.MediaPlayer2.playerctld"),
 };
 
+/*!
+ * The MPRIS root interface. Read (Properties.GetAll) for a player's Identity,
+ * which is the human-readable name the settings window lists; the player
+ * interface itself has no such property.
+ */
+const QString kRootInterface = QStringLiteral("org.mpris.MediaPlayer2");
+
 /*! Dynamic property holding the tracker's state (the frozen header cannot). */
 const char kPrivateProperty[] = "kshadowlrc_playerTrackerPrivate";
 
 struct ScanResult {
     QString wellKnown;
     QString owner;
+    /*! Identity from the root interface, or empty when it could not be read. */
+    QString label;
     PlaybackStatus status = PlaybackStatus::Unknown;
     QVariantMap metadata;
     bool ok = false;
@@ -111,8 +122,11 @@ struct PlayerTrackerPrivate {
     bool scanning = false;
     quint64 scanId = 0;
     QList<ScanResult> scanResults;
+    /*! The list knownPlayers() hands out; only republished when it changes. */
+    QVariantList knownPlayers;
     int ownerPending = 0;
     int propsPending = 0;
+    int labelPending = 0;
     qint64 lastScanMs = 0;
     int refreshFailures = 0;
     bool suppressNextJump = false;
@@ -149,6 +163,8 @@ void onSeeked(PlayerTracker *tracker, qint64 positionUs);
 void scheduleScan(PlayerTracker *tracker);
 void finishScan(PlayerTracker *tracker, quint64 scanId);
 void requestProperties(PlayerTracker *tracker, quint64 scanId);
+void requestLabels(PlayerTracker *tracker, quint64 scanId);
+void publishKnownPlayers(PlayerTracker *tracker);
 void setActivePlayer(PlayerTracker *tracker, const ScanResult &result);
 
 void onTimer(PlayerTracker *tracker)
@@ -223,7 +239,11 @@ void startScan(PlayerTracker *tracker)
                                QStringList candidates;
                                const QStringList names = reply.value();
                                for (const QString &name : names) {
-                                   if (name.startsWith(kMprisPrefix) && !isIgnoredPlayer(priv->ignoredPlayers, name)) {
+                                   // Every MPRIS name is kept, ignored ones
+                                   // included: the settings window lists them
+                                   // all, and only the selection of the active
+                                   // player filters on the ignore list.
+                                   if (name.startsWith(kMprisPrefix)) {
                                        candidates.append(name);
                                    }
                                }
@@ -287,6 +307,46 @@ void requestProperties(PlayerTracker *tracker, quint64 scanId)
                                        result.ok = true;
                                    }
                                    if (--priv->propsPending == 0) {
+                                       requestLabels(tracker, scanId);
+                                   }
+                               });
+    }
+}
+
+/*!
+ * Second properties pass: read the root interface's Identity for every
+ * candidate. A player that does not answer, or has no Identity, keeps an empty
+ * label and falls back to its bus name when the list is built.
+ */
+void requestLabels(PlayerTracker *tracker, quint64 scanId)
+{
+    auto *priv = privOf(tracker);
+    priv->labelPending = priv->scanResults.size();
+    if (priv->labelPending == 0) {
+        finishScan(tracker, scanId);
+        return;
+    }
+
+    for (int i = 0; i < priv->scanResults.size(); ++i) {
+        const QString owner = priv->scanResults.at(i).owner;
+        callAsync<QVariantMap>(owner,
+                               kMprisObjectPath,
+                               kPropertiesInterface,
+                               QStringLiteral("GetAll"),
+                               {kRootInterface},
+                               tracker,
+                               [tracker, scanId, i](const QDBusPendingReply<QVariantMap> &reply) {
+                                   auto *priv = privOf(tracker);
+                                   if (scanId != priv->scanId) {
+                                       return;
+                                   }
+                                   if (!reply.isError() && i < priv->scanResults.size()) {
+                                       const QString identity = reply.value().value(QStringLiteral("Identity")).toString();
+                                       if (!identity.isEmpty()) {
+                                           priv->scanResults[i].label = identity;
+                                       }
+                                   }
+                                   if (--priv->labelPending == 0) {
                                        finishScan(tracker, scanId);
                                    }
                                });
@@ -353,6 +413,46 @@ void finishScan(PlayerTracker *tracker, quint64 scanId)
     } else {
         clearActive(tracker);
     }
+
+    publishKnownPlayers(tracker);
+}
+
+/*!
+ * Rebuilds the list knownPlayers() hands out from the last scan and republishes
+ * it only when something in it changed: the window is a passive reader, so a
+ * signal per scan would be noise.
+ */
+void publishKnownPlayers(PlayerTracker *tracker)
+{
+    auto *priv = privOf(tracker);
+    QVariantList list;
+    list.reserve(priv->scanResults.size());
+    for (const ScanResult &result : std::as_const(priv->scanResults)) {
+        const QString rule = matchingIgnorePattern(priv->ignoredPlayers, result.wellKnown);
+        QVariantMap entry;
+        entry.insert(QStringLiteral("name"), result.wellKnown);
+        entry.insert(QStringLiteral("label"), result.label.isEmpty() ? result.wellKnown : result.label);
+        entry.insert(QStringLiteral("ignored"), !rule.isEmpty());
+        entry.insert(QStringLiteral("active"), priv->active && priv->active->wellKnownName() == result.wellKnown);
+        entry.insert(QStringLiteral("rule"), rule);
+        list.append(entry);
+    }
+    std::sort(list.begin(), list.end(), [](const QVariant &left, const QVariant &right) {
+        const QVariantMap leftEntry = left.toMap();
+        const QVariantMap rightEntry = right.toMap();
+        const int byLabel =
+            leftEntry.value(QStringLiteral("label")).toString().compare(rightEntry.value(QStringLiteral("label")).toString(), Qt::CaseInsensitive);
+        if (byLabel != 0) {
+            return byLabel < 0;
+        }
+        return leftEntry.value(QStringLiteral("name")).toString() < rightEntry.value(QStringLiteral("name")).toString();
+    });
+
+    if (priv->knownPlayers == list) {
+        return;
+    }
+    priv->knownPlayers = list;
+    Q_EMIT tracker->knownPlayersChanged();
 }
 
 void setActivePlayer(PlayerTracker *tracker, const ScanResult &result)
@@ -749,6 +849,22 @@ QStringList PlayerTracker::ignoredPlayers() const
     return privOf(this)->ignoredPlayers;
 }
 
+QVariantList PlayerTracker::knownPlayers() const
+{
+    return privOf(this)->knownPlayers;
+}
+
+void PlayerTracker::refreshKnownPlayers()
+{
+    auto *priv = privOf(this);
+    if (priv->scanning) {
+        return;
+    }
+    // A plain scan, not reconnect(): the followed player must survive a refresh
+    // triggered by merely opening the settings window.
+    startScan(this);
+}
+
 void PlayerTracker::setIgnoredPlayers(const QStringList &patterns)
 {
     auto *priv = privOf(this);
@@ -760,6 +876,9 @@ void PlayerTracker::setIgnoredPlayers(const QStringList &patterns)
     qCInfo(lcPlayerTracker) << "ignored players:" << (patterns.isEmpty() ? QStringList{QStringLiteral("<none>")} : patterns);
 
     if (!priv->started) {
+        // Still republish: each entry's ignored flag and rule just changed, and
+        // the settings window reads the list even before the tracker starts.
+        publishKnownPlayers(this);
         return;
     }
     // A freshly ignored active player must go at once, and a freshly allowed one
@@ -768,6 +887,7 @@ void PlayerTracker::setIgnoredPlayers(const QStringList &patterns)
     if (replacedActive) {
         clearActive(this);
     }
+    publishKnownPlayers(this);
     reconnect();
 }
 

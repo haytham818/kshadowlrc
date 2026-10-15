@@ -15,6 +15,7 @@
 
 using kshadowlrc::ignoredPatternMatches;
 using kshadowlrc::isIgnoredPlayer;
+using kshadowlrc::matchingIgnorePattern;
 
 namespace
 {
@@ -35,6 +36,7 @@ class PlayerMatchTest : public QObject
 private Q_SLOTS:
     void ignoredPatternTable();
     void ignoredPlayerList();
+    void matchingEntryIsReported();
 };
 
 void PlayerMatchTest::ignoredPatternTable()
@@ -112,6 +114,33 @@ void PlayerMatchTest::ignoredPlayerList()
     QVERIFY2(isIgnoredPlayer({QStringLiteral("spotify"), QStringLiteral("chromium")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")),
              "a later matching entry is honoured");
     QVERIFY2(!isIgnoredPlayer({QString(), QString()}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")), "blank entries are inert");
+}
+
+void PlayerMatchTest::matchingEntryIsReported()
+{
+    // --- Which entry matched: matchingIgnorePattern(). ----------------------
+    // Exactly isIgnoredPlayer()'s rule, but returning the entry, so the settings
+    // window can name the rule that caught a player.
+    const QStringList patterns = {
+        QStringLiteral("spotify"),
+        QStringLiteral("org.mpris.MediaPlayer2.firefox"),
+        QStringLiteral("org.mpris.MediaPlayer2.*"),
+    };
+    QVERIFY2(matchingIgnorePattern(patterns, QStringLiteral("org.mpris.MediaPlayer2.firefox.instance1")) == QStringLiteral("org.mpris.MediaPlayer2.firefox"),
+             "returns the matching entry, not the first entry");
+    QVERIFY2(matchingIgnorePattern(patterns, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")) == QStringLiteral("org.mpris.MediaPlayer2.*"),
+             "returns the glob that matched as the fallback");
+    QVERIFY2(matchingIgnorePattern(patterns, QStringLiteral("org.example.vlc")).isEmpty(), "no match yields an empty string");
+    QVERIFY2(matchingIgnorePattern({QStringLiteral("spotify")}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")).isEmpty(),
+             "a non-matching list yields an empty string");
+    QVERIFY2(matchingIgnorePattern(QStringList{}, QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")).isEmpty(),
+             "the empty list yields an empty string");
+
+    // The two forms agree: matchingIgnorePattern() is truthful exactly when
+    // isIgnoredPlayer() is.
+    for (const QString &name : {QStringLiteral("org.mpris.MediaPlayer2.firefox.instance1"), QStringLiteral("org.mpris.MediaPlayer2.chromium.instance1")}) {
+        QVERIFY2(matchingIgnorePattern(patterns, name).isEmpty() == !isIgnoredPlayer(patterns, name), "matchingIgnorePattern agrees with isIgnoredPlayer");
+    }
 }
 
 QTEST_GUILESS_MAIN(PlayerMatchTest)

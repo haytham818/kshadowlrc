@@ -176,8 +176,11 @@ maximum either way; both numbers are `OffsetStepMs` and `MaxOffsetMs` in
 
 - [`PlayerTracker`](src/player/playertracker.cpp) watches the session bus for
   `org.mpris.MediaPlayer2.*` and reports the track, its status and the
-  playback position. Players can be ignored by name; the rule an entry follows
-  is in [src/player/playermatch.h](src/player/playermatch.h).
+  playback position. The settings window lists the players it can see — by the
+  name each player reports for itself, not its bus name — with a switch per
+  player to ignore it or not; an entry written by hand may also be a pattern,
+  and the rule an entry follows is in
+  [src/player/playermatch.h](src/player/playermatch.h).
 - [`LyricEngine`](src/lyrics/lyricengine.cpp) takes a track and walks the lyric
   sources in the configured order, stopping at the first one that has
   something, then picks the timestamped lines to show.

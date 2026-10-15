@@ -5,6 +5,7 @@
 
 #include <QDateTime>
 #include <QObject>
+#include <QVariantList>
 #include <QtGlobal>
 
 namespace kshadowlrc
@@ -102,6 +103,27 @@ public:
     void setIgnoredPlayers(const QStringList &patterns);
     QStringList ignoredPlayers() const;
 
+    /*!
+     * Every MPRIS player currently visible, ignored ones included, for the
+     * settings window to list. Each entry is a map with fixed keys:
+     *
+     *   name    - the well-known bus name (what an ignore entry matches)
+     *   label   - the player's own Identity, falling back to the bus name
+     *   ignored - whether the ignore list currently catches it
+     *   active  - whether the tracker is currently following it
+     *   rule    - the ignore entry that catches it, or empty when none does
+     *
+     * Sorted by label (case-insensitively), ties broken by name.
+     */
+    Q_PROPERTY(QVariantList knownPlayers READ knownPlayers NOTIFY knownPlayersChanged)
+    QVariantList knownPlayers() const;
+
+    /*!
+     * Re-scan once right now so a just-opened window sees the current players;
+     * the player being followed is left alone.
+     */
+    Q_INVOKABLE void refreshKnownPlayers();
+
     /*! Re-scan for players and reconnect to the best candidate right now. */
     void reconnect();
 
@@ -117,6 +139,8 @@ Q_SIGNALS:
      */
     void positionJumped();
     void lyricOffsetChanged(qint64 ms);
+    /*! The content of knownPlayers() changed. */
+    void knownPlayersChanged();
 };
 
 } // namespace kshadowlrc
