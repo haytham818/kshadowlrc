@@ -32,12 +32,12 @@ OverlayWindow::OverlayWindow(QWindow *parent)
     setColor(Qt::transparent);
     setResizeMode(QQuickView::SizeRootObjectToView);
 
-    // While a drag is in flight, read the reported cursor on a fast timer instead
-    // of waiting for QML's translation signal: the surface follows the pointer,
-    // so the pointer barely moves within the window and that signal fires only
-    // when the compositor's repositioning lags. updateDrag() is unchanged and
-    // stays the one place the gesture is applied; applyPointerSample() holds the
-    // arithmetic it feeds.
+    // While a drag is in flight the reported cursor is read on a fast timer as
+    // well as from QML's translation signal, which does fire while the pointer
+    // moves but can go quiet -- the surface follows the pointer, so the pointer
+    // barely moves within the window. updateDrag() stays the one place the gesture
+    // is applied and applyPointerSample() holds the arithmetic it feeds; a call
+    // that brings no new reading costs nothing.
     m_dragPoll.setTimerType(Qt::PreciseTimer);
     m_dragPoll.setInterval(8);
     connect(&m_dragPoll, &QTimer::timeout, this, &OverlayWindow::updateDrag);

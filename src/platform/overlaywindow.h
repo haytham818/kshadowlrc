@@ -35,10 +35,12 @@ namespace kshadowlrc
  *
  * In adjusting mode the surface instead takes pointer input, asks for keyboard
  * interactivity OnDemand so Esc can arrive, and lets the user drag its position
- * and font size. That drag is driven by the window's own poll of the reported
- * pointer position, not by QML's translation delta: the surface follows the
- * pointer, so the pointer barely moves within the window and that signal is no
- * trigger for a smooth drag (see m_dragPoll). A changed anchor set is committed
+ * and font size. Two things feed that drag: QML's translation signal, which does
+ * fire while the pointer moves, and a fast timer of the window's own (see
+ * m_dragPoll) for when it stalls -- the surface follows the pointer, so the
+ * pointer barely moves within the window and that signal can go quiet. Which of
+ * them calls updateDrag() does not matter: only a reading that has changed moves
+ * the box. A changed anchor set is committed
  * to the compositor as soon as it is pushed rather than left to the next
  * rendered frame (see applyAnchors()). That mode is runtime-only: it never
  * reaches the settings file.
