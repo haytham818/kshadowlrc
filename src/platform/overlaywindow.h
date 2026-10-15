@@ -44,11 +44,15 @@ namespace kshadowlrc
  * reaches the settings file.
  *
  * The drag reads QCursor::pos(). Under Wayland Qt builds that value from the
- * pointer's surface-local coordinates plus the window origin Qt believes in,
- * and a layer surface is never told its real position, so the absolute value is
- * offset from the true screen position and a difference across a gesture also
- * carries whatever the surface itself moved by. Know that before adding more
- * arithmetic on top of it.
+ * pointer's surface-local coordinates plus the window origin Qt believes in, and
+ * a layer surface is never told its real position, so the absolute value is
+ * offset from the true screen position -- it is not a screen coordinate. Its
+ * difference across a gesture is not the pointer's own movement either: it also
+ * carries whatever the surface itself moved by, and the surface is exactly what
+ * the drag moves. applyDragDelta() corrects for that: it adds the delta to the
+ * top-left actually pushed, the best estimate of where the compositor has put
+ * the surface, so the surface's own movement cancels out and the box tracks the
+ * pointer 1:1.
  */
 class OverlayWindow : public QQuickView
 {
@@ -149,7 +153,7 @@ public:
     }
 
     /*!
-     * Whether the drag's global-cursor poll is running. Exposed only so the
+     * Whether the drag's reported-cursor poll is running. Exposed only so the
      * poll's lifetime can be asserted without a compositor: offscreen the cursor
      * cannot move, so a drag driven through the public API never sees the
      * pointer change and the poll's own start/stop is read back here instead.
@@ -178,19 +182,29 @@ public:
 
     /*!
      * Start a drag. \p handlesFont picks the font-size gesture; otherwise it
-     * moves the box. The origin is taken from QCursor::pos() -- global screen
-     * coordinates, never surface-local ones, because the surface follows the
-     * cursor and its own coordinates would barely move. Also starts the poll that
-     * keeps reading that global cursor until the drag ends.
+     * moves the box. The origin is taken from QCursor::pos(), which under Wayland
+     * is not a screen position: it is the pointer's surface-local coordinates
+     * plus the window origin Qt believes in (see the class comment). The gestures
+     * work from the difference against this value, and that difference carries
+     * the surface's own movement because the surface is what the drag moves;
+     * applyDragDelta() adds that movement back. Also starts the poll that keeps
+     * reading the reported cursor until the drag ends.
      */
     Q_INVOKABLE void beginDrag(bool handlesFont);
     /*!
-     * Apply the drag to the placement or the font size from the current global
-     * cursor. Called by the drag poll every few milliseconds, and once
-     * immediately by QML's onActiveTranslationChanged. Recomputing while the
-     * pointer has not moved does no work: both setters compare before pushing.
+     * Feed the current cursor's report to applyDragDelta(). Called by the drag
+     * poll every few milliseconds, and once immediately by QML's
+     * onActiveTranslationChanged. Recomputing while the pointer has not moved
+     * does no work: both setters compare before pushing.
      */
     Q_INVOKABLE void updateDrag();
+    /*!
+     * The drag's arithmetic, for a pointer the platform reports as having moved
+     * \a reportedDelta since the drag was grabbed. updateDrag() is only this fed
+     * with the platform's own report; the movement is an argument so a test can
+     * drive a whole gesture, which the offscreen cursor cannot (it cannot move).
+     */
+    void applyDragDelta(const QPoint &reportedDelta);
     /*!
      * Finish the drag, stopping the poll and reporting the result through the
      * *Edited signals. A gesture that changed nothing reports nothing, so only a
@@ -298,10 +312,10 @@ private:
     QSize m_dragBox = QSize(1, 1);
     int m_dragStartFontSize = 0;
 
-    // Polls the global cursor while a drag is in flight. The surface follows the
-    // pointer, so QML's translation delta barely changes and cannot be the drag's
-    // trigger; this timer is. Started in beginDrag(), stopped in endDrag() and on
-    // a cancelled exit (Esc).
+    // Polls the reported cursor while a drag is in flight. The surface follows
+    // the pointer, so QML's translation delta barely changes and cannot be the
+    // drag's trigger; this timer is. Started in beginDrag(), stopped in endDrag()
+    // and on a cancelled exit (Esc).
     QTimer m_dragPoll;
 
     QString m_outputName;

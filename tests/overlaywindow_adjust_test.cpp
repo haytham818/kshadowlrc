@@ -14,11 +14,13 @@
 // points at a private temporary directory so the settings writes under test
 // cannot reach the developer's real kshadowlrcrc.
 //
-// The offscreen cursor cannot move, so a drag through the public API is always
-// motionless here: that is what the "a motionless click emits nothing" checks
-// rely on. There is also no screen, so the release has nothing to magnetise
-// against and keeps the live point; the live point a real drag would apply is
-// set directly through setPlacement() where a committed edit is under test.
+// The offscreen cursor cannot move, so a drag driven only through the public
+// API is motionless here: that is what the "a motionless click emits nothing"
+// check relies on. The platform's report of a moving pointer is modelled as an
+// argument instead (applyDragDelta), so a whole gesture can still be driven
+// offline -- see positionDragFollowsThePointerUnderThePlatformsReport. Where a
+// committed edit is under test the live point is set directly through
+// setPlacement().
 
 #include "config/settings.h"
 #include "platform/overlaywindow.h"
@@ -53,6 +55,7 @@ private Q_SLOTS:
     void frozenSurfaceDuringPositionDrag();
     void dragPollLivesExactlyAsLongAsTheDrag();
     void repeatedPlacementPushesTheSameLayerStateOnce();
+    void positionDragFollowsThePointerUnderThePlatformsReport();
 };
 
 void OverlayWindowAdjustTest::enteringOverridesClickThroughAndKeyboard()
@@ -358,6 +361,87 @@ void OverlayWindowAdjustTest::repeatedPlacementPushesTheSameLayerStateOnce()
     QCOMPARE(overlay.placement(), (Placement{60.0, 20.0}));
     QCOMPARE(layerWindow->anchors(), expected.anchors);
     QCOMPARE(layerWindow->margins(), expected.margins);
+}
+
+void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsReport()
+{
+    // A position drag, driven offline through the two public seams that exist for
+    // it. The offscreen cursor cannot move, so updateDrag() -- which is just
+    // applyDragDelta() fed the platform's own report -- would feed a zero delta
+    // forever; instead the platform's report is modelled here as an argument and
+    // the whole gesture is played through applyDragDelta().
+    //
+    // The model is the one the field logs show: QCursor::pos() is the window
+    // origin Qt believes in (a constant under Wayland, because a layer surface is
+    // never told its real position) plus the pointer's place inside the surface,
+    // and the surface is exactly what the drag moves. Measured against the
+    // surface, the report therefore equals the change in (pointer - surface
+    // top-left):
+    //   report = (pointerNow - surfaceTopLeftNow) - (pointerAtGrab - grabTopLeft)
+    // The "surface top-left" is the window's own last pushed top-left, read back
+    // through placementBoxTopLeft() -- a faithful stand-in for where the
+    // compositor has applied the surface. That is precisely why the report
+    // carries the surface's own movement, the bug the drag had: one real drag of
+    // 4883 events showed a surface-local cursor span of 811 px and a margin span
+    // of 811 px against a real pointer travel of 1622 px, exactly half. Adding
+    // the report to the already-pushed top-left cancels the surface's own share,
+    // so the box tracks the pointer 1:1, and the clamp stays transparent: pushed
+    // off the edge and back, the box returns exactly under the pointer.
+    OverlayWindow overlay;
+    overlay.setContentSize(400, 100);
+    overlay.beginAdjusting();
+
+    QVERIFY(overlay.screen());
+    const QSize screen = overlay.screen()->geometry().size();
+    QVERIFY(!screen.isEmpty());
+
+    // The box is frozen at the grab-time size by beginDrag(false); take it before
+    // the grab, exactly as a position drag does.
+    const QSize box = overlay.adjustmentBox();
+
+    const Placement grabPlacement{50.0, 80.0};
+    overlay.setPlacement(grabPlacement);
+    const QPoint grabTopLeft = placementBoxTopLeft(grabPlacement, box, screen);
+    // A real pointer sits somewhere inside the surface (the box plus its
+    // padding); any point works, only its offset against the box matters.
+    const QPoint pointerAtGrab = grabTopLeft + QPoint(box.width() / 2, box.height() / 2);
+
+    overlay.beginDrag(false);
+
+    // The surface's top-left the window has pushed, as the compositor would see
+    // it: the placement maths read back on the same box and screen.
+    const auto pushedTopLeft = [&overlay, box, screen] {
+        return placementBoxTopLeft(overlay.placement(), box, screen);
+    };
+    // What the platform reports for a pointer now at \a pointerNow, given the
+    // surface the window has actually pushed.
+    const auto reportedDelta = [&](QPoint pointerNow) {
+        return (pointerNow - pushedTopLeft()) - (pointerAtGrab - grabTopLeft);
+    };
+    // The top-left the box should end each step at, clamped exactly as the drag
+    // clamps: the grab plus the pointer's whole travel, kept inside the screen.
+    const auto expectedTopLeft = [&](QPoint pointerNow) {
+        return clampToScreen(grabTopLeft + (pointerNow - pointerAtGrab), box, screen);
+    };
+
+    // A pointer that keeps moving, including one step far past the right edge and
+    // a later step back inside: the clamp must pin the box and then let it return
+    // exactly under the pointer. The last step pushes past the bottom edge too.
+    const QPoint offRight(screen.width() + 600, pointerAtGrab.y() - 20);
+    const QPoint backInside(screen.width() / 2 + 100, pointerAtGrab.y() - 20);
+    const QPoint nearBottom(backInside.x(), screen.height() + 300);
+    const QPoint steps[] = {
+        pointerAtGrab + QPoint(30, -10),
+        pointerAtGrab + QPoint(70, -30),
+        offRight,
+        backInside,
+        nearBottom,
+    };
+
+    for (const QPoint &pointerNow : steps) {
+        overlay.applyDragDelta(reportedDelta(pointerNow));
+        QCOMPARE(pushedTopLeft(), expectedTopLeft(pointerNow));
+    }
 }
 
 int main(int argc, char **argv)

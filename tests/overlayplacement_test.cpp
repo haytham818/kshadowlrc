@@ -4,8 +4,9 @@
 // Offline test for the pure overlay geometry in src/platform/overlayplacement.*.
 //
 // Nothing here touches a QWindow or a compositor: the point model, its inverse,
-// the magnet, clamping, the layer-shell anchor conversion and the font mapping
-// are all plain values, so every rule is checked directly.
+// the magnet, clamping, the position-drag mapping, the layer-shell anchor
+// conversion and the font mapping are all plain values, so every rule is
+// checked directly.
 
 #include "platform/overlayplacement.h"
 
@@ -38,6 +39,7 @@ private Q_SLOTS:
     void paddingShiftsTheSurfaceMargins();
     void fontDragGrowsDownwardAndClamps();
     void onePointHoldsForAnyBoxSize();
+    void positionDragFollowsTheReportedPointerExactly();
 };
 
 void OverlayPlacementTest::boxTopLeftFromPercentages()
@@ -181,6 +183,85 @@ void OverlayPlacementTest::onePointHoldsForAnyBoxSize()
         // grabbed any of them stores the same point back.
         QCOMPARE(placementFor(topLeft, box, kScreen, 0), point);
     }
+}
+
+void OverlayPlacementTest::positionDragFollowsTheReportedPointerExactly()
+{
+    // 9. A position drag must follow the pointer 1:1 even though the platform
+    //    never reports a screen coordinate. On Wayland the reported value is
+    //    Qt's idea of the window origin (the layer surface sits at the screen
+    //    origin) plus the pointer inside the surface - and the surface is what
+    //    the drag moves. So the reported movement is the pointer's real movement
+    //    *minus* the surface's own, and the base it goes on must be the top-left
+    //    last pushed, never the one captured at grab time.
+    //
+    //    The live log that drove the fix, on a 2560x1440 screen: over one drag
+    //    the pointer's in-surface coordinate spanned 811 px and the margins we
+    //    asked for spanned 811 px, while the pointer really travelled 1622 px.
+    //    The old grab-time base counted the surface's own movement twice.
+    const QSize screen(2560, 1440);
+    const QSize box(400, 100);
+    const Placement placement{50.0, 40.0};
+
+    const QPoint grabTopLeft = placementBoxTopLeft(placement, box, screen);
+    const QPoint pointerAtGrab = grabTopLeft + QPoint(100, 50);
+
+    // Four steps of different sizes, the pointer reversing on the second one.
+    // x sums to 1622 while the even-positioned steps sum to 811, so the old
+    // base below lands exactly on half the trip; the small y wiggle nets 40.
+    // All integers, so every comparison in this test is exact.
+    const QList<QPoint> steps = {
+        QPoint(300, -40),
+        QPoint(-200, 60),
+        QPoint(511, 60),
+        QPoint(1011, -40),
+    };
+
+    // A drag in progress: the top-left we have already pushed to the surface,
+    // starting at the grabbed one, and the pointer's real position.
+    QPoint pushedTopLeft = grabTopLeft;
+    QPoint pointer = pointerAtGrab;
+
+    for (const QPoint &step : steps) {
+        pointer += step;
+
+        // What the platform reports with the surface sitting where we last put
+        // it: the pointer's position inside the surface now, less the one it had
+        // when the grab began. The compositor has applied our pushes - exactly
+        // what the live log showed.
+        const QPoint reportedDelta = (pointer - pushedTopLeft) - (pointerAtGrab - grabTopLeft);
+
+        pushedTopLeft = draggedBoxTopLeft(pushedTopLeft, reportedDelta);
+
+        // 1:1: the box is where the pointer's real movement puts it, not halfway.
+        QCOMPARE(pushedTopLeft, grabTopLeft + (pointer - pointerAtGrab));
+    }
+
+    // Negative control, the regression guard for this very bug. The old rule
+    // applied the reported movement to the grab-time top-left,
+    // grabTopLeft + reportedDelta, so it kept re-adding the surface's own
+    // movement and its lag grew by half of every step: the box ends up about
+    // half the trip behind. Same steps, but each reported value is now read
+    // against the top-left the old rule itself had pushed - the live bug - so
+    // the run diverges exactly as it did on screen.
+    QPoint oldTopLeft = grabTopLeft;
+    pointer = pointerAtGrab;
+    for (const QPoint &step : steps) {
+        pointer += step;
+        const QPoint reportedDelta = (pointer - oldTopLeft) - (pointerAtGrab - grabTopLeft);
+        oldTopLeft = grabTopLeft + reportedDelta;
+    }
+
+    // The old rule is about half the pointer's travel from the grab - 811
+    // against 1622 on x, as in the log. The relation is approximate in general
+    // (the lag grows by half a step each event), so allow a pixel or two.
+    const QPoint oldTravel = oldTopLeft - grabTopLeft;
+    const QPoint realTravel = pointer - pointerAtGrab;
+    QVERIFY(qAbs(oldTravel.x() - realTravel.x() / 2) <= 2);
+    QVERIFY(qAbs(oldTravel.y() - realTravel.y() / 2) <= 2);
+
+    // And it is behind the pointer, not ahead of it.
+    QVERIFY(oldTravel.x() < realTravel.x());
 }
 
 QTEST_GUILESS_MAIN(OverlayPlacementTest)

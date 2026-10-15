@@ -84,6 +84,14 @@ QPoint clampToScreen(QPoint boxTopLeft, QSize box, QSize screen)
     return QPoint(std::clamp(boxTopLeft.x(), 0, maxX), std::clamp(boxTopLeft.y(), 0, maxY));
 }
 
+QPoint draggedBoxTopLeft(QPoint pushedTopLeft, QPoint reportedDelta)
+{
+    // The platform has already subtracted the surface's own movement from what
+    // it reports (see the header), so from the last pushed top-left the movement
+    // is exactly the pointer's: the box follows 1:1.
+    return pushedTopLeft + reportedDelta;
+}
+
 int fontSizeForDrag(int startPoints, QPointF delta)
 {
     // The top edge is pinned, so the box grows downward: dragging down grows the

@@ -75,6 +75,26 @@ Placement placementFor(QPoint boxTopLeft, QSize box, QSize screen, int magnetPx)
 QPoint clampToScreen(QPoint boxTopLeft, QSize box, QSize screen);
 
 /*!
+ * The box's top-left a position drag should ask for: where the drag has already
+ * put the box, \a pushedTopLeft, displaced by \a reportedDelta - the movement
+ * the platform reports for the pointer since the drag was grabbed.
+ *
+ * What the platform reports is not a screen coordinate. On Wayland it is Qt's
+ * idea of the window's own origin plus the pointer's position inside the
+ * surface, and the surface is the very thing a position drag moves. So the
+ * reported displacement is the pointer's real movement *minus* the movement of
+ * the surface itself. To follow the pointer 1:1 that share has to be added
+ * back, and the best estimate of where the surface is right now is the top-left
+ * last pushed to it - hence \a pushedTopLeft is the base the displacement goes
+ * on.
+ *
+ * Applying the same displacement to the top-left captured at grab time instead
+ * counts the surface's own movement twice: the box then travels half as far as
+ * the pointer and never catches up. That is the drag bug this replaces.
+ */
+QPoint draggedBoxTopLeft(QPoint pushedTopLeft, QPoint reportedDelta);
+
+/*!
  * The layer-shell anchors and margins that put the box's top-left at
  * \a boxTopLeft.
  *

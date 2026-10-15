@@ -32,11 +32,12 @@ OverlayWindow::OverlayWindow(QWindow *parent)
     setColor(Qt::transparent);
     setResizeMode(QQuickView::SizeRootObjectToView);
 
-    // While a drag is in flight, read the global cursor on a fast timer instead
+    // While a drag is in flight, read the reported cursor on a fast timer instead
     // of waiting for QML's translation signal: the surface follows the pointer,
     // so the pointer barely moves within the window and that signal fires only
-    // when the compositor's repositioning lags. updateDrag() itself is unchanged
-    // and stays the one place the gesture is applied.
+    // when the compositor's repositioning lags. updateDrag() is unchanged and
+    // stays the one place the gesture is applied; applyDragDelta() holds the
+    // arithmetic it feeds.
     m_dragPoll.setTimerType(Qt::PreciseTimer);
     m_dragPoll.setInterval(8);
     connect(&m_dragPoll, &QTimer::timeout, this, &OverlayWindow::updateDrag);
@@ -346,22 +347,40 @@ void OverlayWindow::beginDrag(bool handlesFont)
 
 void OverlayWindow::updateDrag()
 {
+    // The guard lives in applyDragDelta(), so this stays nothing but the platform
+    // report fed to the gesture's arithmetic.
+    applyDragDelta(QCursor::pos() - m_dragOriginCursor);
+}
+
+void OverlayWindow::applyDragDelta(const QPoint &reportedDelta)
+{
     if (!m_dragging) {
         return;
     }
 
-    const QPointF delta = QCursor::pos() - m_dragOriginCursor;
-
     if (m_dragHandlesFont) {
-        // The top edge is pinned, so the box grows downward: dragging down grows
-        // the text. There is no anchor to consult any more, so nothing can flip
-        // the sign under the pointer.
-        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, delta));
+        // No compensation needed here. A font gesture pins the box's top edge --
+        // anchorsFor() only ever sets a top-left margin and verticalPercent does
+        // not change -- so the surface does not move vertically and the reported
+        // vertical movement is already clean. The horizontal report does carry
+        // the surface's own movement (the box widens about its centre, so its
+        // left edge moves), which is why the gesture reads only the y component.
+        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, reportedDelta));
         return;
     }
 
     const QSize screen = screenSize();
-    const QPoint moved = placementBoxTopLeft(m_dragStartPlacement, m_dragBox, screen) + QPoint(qRound(delta.x()), qRound(delta.y()));
+    // The report is not the pointer's movement on its own: it is missing the
+    // surface's own movement, because the surface is exactly what the drag moves
+    // and Wayland never tells it its real position (see the class comment). So the
+    // surface's share is added back by moving from the top-left already pushed --
+    // the best estimate of where the compositor has applied it -- rather than from
+    // the grab-time top-left, which would count the surface's movement twice and
+    // let the box travel only half as far as the pointer. Field evidence: one
+    // 4883-event drag showed a surface-local cursor span of 811 px and a margin
+    // span of 811 px against a real pointer travel of 1622 px -- exactly half.
+    const QPoint pushed = placementBoxTopLeft(m_placement, m_dragBox, screen);
+    const QPoint moved = draggedBoxTopLeft(pushed, reportedDelta);
     // Clamped so the box can never be dragged half off-screen, then turned into
     // the point. No live magnet: snapping while the drag is in flight is what
     // makes the position jump within AdjustMagnetPx of the middle; the magnet is
