@@ -16,8 +16,11 @@
 // corners are part of the item and are drawn only while the mode is on; that no
 // grab is armed while it is off, so the surface stays as click-through as it
 // was; that a wheel event over the lyric block arrives at the window's
-// nudgeFontSize() carrying the raw angle the wheel reported (the step, the
-// limits and the leftover between notches are the window's, not QML's); that
+// nudgeFontSize() carrying the raw angle the wheel reported - both as a mouse
+// device and as a touchpad one, the device a physical mouse's wheel carries on
+// Wayland and the one a Mouse-only WheelHandler would silently drop (the step,
+// the limits and the leftover between notches are the window's, not QML's);
+// that
 // each handle sits on a corner one adjusting padding inside the surface; that
 // the drawn lyric line takes the live preview size from overlayWindow while a
 // corner is dragged and the configured size otherwise, with the translation and
@@ -29,11 +32,13 @@
 // The platform plugin is offscreen: no network, no screen, and the one wheel
 // event goes to this test's own window, inside this process.
 
+#include <QCoreApplication>
 #include <QFont>
 #include <QGuiApplication>
 #include <QList>
 #include <QPair>
 #include <QPointF>
+#include <QPointingDevice>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -45,6 +50,7 @@
 #include <QStringList>
 #include <QTest>
 #include <QUrl>
+#include <QWheelEvent>
 
 #include <KLocalizedQmlContext>
 #include <KLocalizedString>
@@ -302,6 +308,7 @@ private Q_SLOTS:
     void drawsTheFrameAndHandlesWhileAdjusting();
     void theLyricSizeFollowsTheLivePreview();
     void theWheelReachesTheWindow();
+    void theWheelReachesTheWindowFromATouchpad();
     void escapeReachesTheWindow();
 
 private:
@@ -630,6 +637,64 @@ void OverlayAdjustQmlTest::theWheelReachesTheWindow()
     setAdjusting(false);
     QTest::wheelEvent(&m_window, overTheLyrics, QPoint(0, 120));
     QCOMPARE(m_overlay.fontNudges(), andOneOddOne);
+}
+
+void OverlayAdjustQmlTest::theWheelReachesTheWindowFromATouchpad()
+{
+    QVERIFY(m_root != nullptr);
+
+    // The wheel of a physical mouse arrives on Wayland on a TouchPad device, not
+    // a Mouse one: qtwayland registers no Mouse device at all, only the touchpad
+    // the compositor's pointer gestures imply, and Qt hands the wheel to that.
+    // The device is made by hand here so the event carries what the desktop
+    // carries - QTest::wheelEvent would go through the offscreen platform's
+    // synthetic Mouse device and stay green even with a handler that filters
+    // TouchPad out, which is the regression this pins.
+    QPointingDevice touchpad(QStringLiteral("test touchpad"),
+                             1,
+                             QInputDevice::DeviceType::TouchPad,
+                             QPointingDevice::PointerType::Finger,
+                             QInputDevice::Capability::Scroll,
+                             1,
+                             0);
+    QCOMPARE(touchpad.type(), QInputDevice::DeviceType::TouchPad);
+
+    QObject *wheel = byObjectName(QStringLiteral("adjustWheel"));
+    QVERIFY2(wheel != nullptr && wheel->inherits("QQuickWheelHandler"), "the adjusting block carries a wheel handler");
+
+    auto *overlay = qobject_cast<QQuickItem *>(byObjectName(QStringLiteral("adjustOverlay")));
+    QVERIFY2(overlay != nullptr, "the adjusting block is part of the item");
+
+    setAdjusting(true);
+    QVERIFY2(wheel->property("enabled").toBool(), "the wheel is listened to while the mode is on");
+
+    // One notch up on that device. The event is handed to the window directly, as
+    // a real one would be, carrying the touchpad; the handler is only ever
+    // reached through the scene, so the window is the target.
+    const int before = m_overlay.fontNudges().size();
+    const QPointF where(overlay->width() / 2, overlay->height() / 2);
+    QWheelEvent event(where,
+                      m_window.mapToGlobal(where.toPoint()),
+                      QPoint(),
+                      QPoint(0, 120),
+                      Qt::NoButton,
+                      Qt::NoModifier,
+                      Qt::ScrollUpdate,
+                      false,
+                      Qt::MouseEventNotSynthesized,
+                      &touchpad);
+    QCoreApplication::sendEvent(&m_window, &event);
+
+    // The angle arrives untouched, and the list growing is what says the event
+    // was handled rather than dropped: on a Mouse-only handler nothing reaches
+    // the window at all.
+    QCOMPARE(m_overlay.fontNudges().size(), before + 1);
+    QCOMPARE(m_overlay.fontNudges().last(), 120);
+
+    // And it goes deaf with the rest of the block, the touchpad included.
+    setAdjusting(false);
+    QCoreApplication::sendEvent(&m_window, &event);
+    QCOMPARE(m_overlay.fontNudges().size(), before + 1);
 }
 
 void OverlayAdjustQmlTest::escapeReachesTheWindow()

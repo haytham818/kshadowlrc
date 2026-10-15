@@ -218,8 +218,18 @@ Item {
         // floor, the 8..160 pt range, the leftover between notches - is the
         // window's business (OverlayWindow::nudgeFontSize). Nothing is converted
         // or clamped here.
+        //
+        // The accepted devices are named because the default is wrong here: a
+        // WheelHandler takes the Mouse device alone, but on Wayland the wheel of
+        // a plain mouse is reported as a TouchPad - the compositor's pointer
+        // gestures make the touchpad the only pointing device qtwayland
+        // registers, and Qt falls back to it - so the event would be dropped
+        // without a signal or a QML warning and the wheel would do nothing at
+        // all. Naming both lets that event through, and a real touchpad's
+        // two-finger scroll sizes the text too, which in this mode is wanted.
         WheelHandler {
             objectName: "adjustWheel"
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             enabled: overlayWindow.adjusting
 
             onWheel: (event) => overlayWindow.nudgeFontSize(event.angleDelta.y)
