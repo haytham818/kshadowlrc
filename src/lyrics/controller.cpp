@@ -6,10 +6,13 @@
 #include "config/settings.h"
 #include "kshadowlrc.h"
 #include "lyrics/lrcparser.h"
+#include "lyrics/lyricsearch.h"
 #include "lyrics/lyricstatus.h"
 #include "lyrics/providers/lrclib.h"
 #include "lyrics/providers/netease.h"
 #include "player/playertracker.h"
+
+#include <KLocalizedString>
 
 #include <QLoggingCategory>
 
@@ -52,6 +55,30 @@ const auto kDemoTranslation = QStringLiteral(
 
 constexpr qint64 kDemoEndMs = 25000;
 
+/*!
+ * The prefill the search window starts from: what the player said is playing.
+ * Empty when nothing is, so the window can say so rather than searching for
+ * nothing; the user is expected to edit whatever comes back.
+ */
+QString queryTextFor(const TrackMeta &track)
+{
+    if (!track.isValid()) {
+        return {};
+    }
+    QStringList parts;
+    const QString title = track.title.trimmed();
+    if (!title.isEmpty()) {
+        parts.append(title);
+    }
+    for (const QString &artist : track.artists) {
+        const QString trimmed = artist.trimmed();
+        if (!trimmed.isEmpty()) {
+            parts.append(trimmed);
+        }
+    }
+    return parts.join(QLatin1Char(' '));
+}
+
 } // namespace
 
 LyricsController::LyricsController(QObject *parent)
@@ -66,6 +93,19 @@ LyricsController::LyricsController(QObject *parent)
     m_engine.setLocalSource(&m_localFiles);
     // The overlay shows a primary line plus a translation; keep both by default.
     m_engine.setDisplayMode(LyricDisplayMode::Both);
+
+    // The manual search ("search lyrics" in the tray) asks the same providers.
+    // Which of them it lists first is decided in applyProviders(), where the
+    // engine's order is already resolved.
+    m_search = new LyricSearch(this);
+    // A pin fetches one lyric through the provider the chosen row came from, so
+    // both providers' lyric signals end up here. The engine's own fetches carry
+    // request ids this object has never seen and fall through.
+    const QList<LyricProvider *> providers = {m_netease, m_lrclib};
+    for (LyricProvider *provider : providers) {
+        connect(provider, &LyricProvider::lyricFinished, this, &LyricsController::onPinLyricFinished);
+        connect(provider, &LyricProvider::lyricFailed, this, &LyricsController::onPinLyricFailed);
+    }
 
     connect(&m_engine, &LyricEngine::currentLineChanged, this, [this](const QString &text, const QString &translation) {
         qCDebug(lcLyrics) << "line:" << text << (translation.isEmpty() ? QString() : QStringLiteral("/ ") + translation);
@@ -243,6 +283,11 @@ void LyricsController::applyProviders()
     qCDebug(lcLyrics) << "providers enabled:" << (names.isEmpty() ? QStringLiteral("<none>") : names.join(QStringLiteral(", ")))
                       << "order:" << m_engine.sourceOrder();
 
+    // The manual search lists one group per provider, in the order the walk
+    // would try them: ask the engine, which owns that rule, rather than
+    // reimplementing it here.
+    m_search->setProviders(m_engine.providersInSourceOrder());
+
     reloadCurrentTrack();
 }
 
@@ -255,8 +300,193 @@ void LyricsController::reloadCurrentTrack()
         return;
     }
     qCDebug(lcLyrics) << "re-fetching" << track.title << "after a provider/order change";
+    // clear() keeps the pinned lyric deliberately (a pin belongs to the song,
+    // not to the walk), so re-read it only when it may have changed.
+    applyPinFor(track);
     m_engine.clear();
     m_engine.setTrack(track);
+    updatePinState();
+}
+
+QString LyricsController::trackQuery() const
+{
+    return m_trackQuery;
+}
+
+QString LyricsController::pinnedDescription() const
+{
+    return m_pinnedDescription;
+}
+
+QString LyricsController::pinStatus() const
+{
+    return m_pinStatus;
+}
+
+void LyricsController::pinSearchResult(int index)
+{
+    const QVariantList results = m_search->results();
+    if (index < 0 || index >= results.size()) {
+        setPinStatus(i18nc("@info:status", "That entry is no longer in the list."));
+        return;
+    }
+
+    const QVariantMap row = results.at(index).toMap();
+    const TrackMeta track = m_engine.track();
+    if (!track.isValid()) {
+        setPinStatus(i18nc("@info:status", "Nothing is playing, so there is nothing to pin these lyrics to."));
+        return;
+    }
+    const QString key = pinstore::keyFor(track);
+    if (key.isEmpty()) {
+        setPinStatus(i18nc("@info:status", "This song has nothing to pin its lyrics to: the player reported no name and no length."));
+        return;
+    }
+
+    LyricProvider *provider = providerForName(row.value(QStringLiteral("provider")).toString());
+    if (!provider) {
+        setPinStatus(i18nc("@info:status", "That entry comes from a source this build does not have."));
+        return;
+    }
+
+    PendingPin pending;
+    pending.track = track;
+    pending.provider = row.value(QStringLiteral("provider")).toString();
+    pending.songId = row.value(QStringLiteral("id")).toString();
+    // The words the window shows once this is pinned: which source it came from,
+    // then which of its entries the user picked.
+    const QString singer = row.value(QStringLiteral("singer")).toString();
+    pending.source = row.value(QStringLiteral("providerLabel")).toString() + QStringLiteral(" — ") + row.value(QStringLiteral("title")).toString()
+        + (singer.isEmpty() ? QString() : QStringLiteral(" / ") + singer);
+
+    const quint64 requestId = m_nextPinRequestId++;
+    m_pendingPins.insert(requestId, pending);
+    qCInfo(lcLyrics) << "pinning" << pending.source << "to" << track.title;
+    setPinStatus(i18nc("@info:status", "Fetching the lyric…"));
+    provider->queryLyric(requestId, pending.songId);
+}
+
+void LyricsController::forgetPinnedLyric()
+{
+    const TrackMeta track = m_engine.track();
+    if (!track.isValid()) {
+        setPinStatus(i18nc("@info:status", "Nothing is playing, so there is nothing to forget."));
+        return;
+    }
+    if (!pinstore::forget(track)) {
+        setPinStatus(i18nc("@info:status", "This song has no pinned lyrics."));
+        return;
+    }
+
+    qCInfo(lcLyrics) << "pin forgotten for" << track.title;
+    m_currentPin.reset();
+    m_engine.setPinnedLyric(QString{}, LyricStore{});
+    setPinStatus(QString{});
+    // Resolve the song again from scratch: with the pin gone, the walk decides.
+    reloadCurrentTrack();
+}
+
+void LyricsController::onPinLyricFinished(quint64 requestId, const QString &songId, const kshadowlrc::LyricStore &store)
+{
+    Q_UNUSED(songId)
+    const auto it = m_pendingPins.find(requestId);
+    if (it == m_pendingPins.end()) {
+        return; // not one of ours: this is the engine's own fetch
+    }
+    const PendingPin pending = it.value();
+    m_pendingPins.erase(it);
+
+    if (!store.hasAny()) {
+        setPinStatus(i18nc("@info:status", "That entry carries no lyric text to pin."));
+        return;
+    }
+
+    pinstore::Pin pin;
+    pin.store = store;
+    pin.source = pending.source;
+    pin.provider = pending.provider;
+    pin.songId = pending.songId;
+    pin.title = pending.track.title;
+    pin.singer = pending.track.artists.join(QStringLiteral(" / "));
+    if (!pinstore::save(pending.track, pin)) {
+        setPinStatus(i18nc("@info:status", "The chosen lyrics could not be saved."));
+        return;
+    }
+
+    qCInfo(lcLyrics) << "pinned" << pending.source << "to" << pending.track.title;
+    setPinStatus(QString{});
+    // Re-resolve only while that song is still the one playing; otherwise the
+    // pin waits for the player to come back to it.
+    if (m_engine.track().sameSong(pending.track)) {
+        reloadCurrentTrack();
+    }
+}
+
+void LyricsController::onPinLyricFailed(quint64 requestId, const QString &songId, const QString &error)
+{
+    Q_UNUSED(songId)
+    const auto it = m_pendingPins.find(requestId);
+    if (it == m_pendingPins.end()) {
+        return;
+    }
+    m_pendingPins.erase(it);
+    qCWarning(lcLyrics) << "pinning failed:" << error;
+    setPinStatus(i18nc("@info:status", "That lyric could not be fetched: %1", error));
+}
+
+void LyricsController::applyPinFor(const TrackMeta &track)
+{
+    m_currentPin.reset();
+    if (track.isValid()) {
+        m_currentPin = pinstore::lookup(track);
+    }
+    // A record with no text is not a pin: it would claim the song is pinned and
+    // then resolve it the ordinary way, which is the opposite of a promise.
+    if (m_currentPin && !m_currentPin->store.hasAny()) {
+        qCWarning(lcLyrics) << "ignoring a pinned record that carries no text for" << track.title;
+        m_currentPin.reset();
+    }
+
+    if (m_currentPin) {
+        qCDebug(lcLyrics) << "pinned lyric for" << track.title << ":" << m_currentPin->source;
+        m_engine.setPinnedLyric(pinstore::keyFor(track), m_currentPin->store);
+    } else {
+        m_engine.setPinnedLyric(QString{}, LyricStore{});
+    }
+}
+
+void LyricsController::updatePinState()
+{
+    const QString query = queryTextFor(m_engine.track());
+    if (query != m_trackQuery) {
+        m_trackQuery = query;
+        Q_EMIT trackQueryChanged();
+    }
+    const QString description = (m_currentPin && m_engine.track().isValid()) ? m_currentPin->source : QString();
+    if (description != m_pinnedDescription) {
+        m_pinnedDescription = description;
+        Q_EMIT pinnedDescriptionChanged();
+    }
+}
+
+void LyricsController::setPinStatus(const QString &status)
+{
+    if (m_pinStatus == status) {
+        return;
+    }
+    m_pinStatus = status;
+    Q_EMIT pinStatusChanged();
+}
+
+LyricProvider *LyricsController::providerForName(const QString &name) const
+{
+    const QList<LyricProvider *> providers = {m_netease, m_lrclib};
+    for (LyricProvider *provider : providers) {
+        if (provider->name() == name) {
+            return provider;
+        }
+    }
+    return nullptr;
 }
 
 void LyricsController::applyConfiguredOffset()
@@ -318,6 +548,7 @@ void LyricsController::onPlayerConnected()
     startClock();
     qCDebug(lcLyrics) << "player connected:" << (m_tracker ? m_tracker->playerName() : QString());
     updateDisplay();
+    updatePinState();
 }
 
 void LyricsController::onPlayerDisconnected()
@@ -327,12 +558,17 @@ void LyricsController::onPlayerDisconnected()
     m_engine.clear();
     qCDebug(lcLyrics) << "player disconnected; lyric cleared";
     updateDisplay();
+    updatePinState();
 }
 
 void LyricsController::onTrackChanged(const kshadowlrc::TrackMeta &track)
 {
     qCDebug(lcLyrics) << "track changed:" << track.title << "-" << track.artists.join(QStringLiteral(", "));
+    // Read the pin first: the engine only skips the cache and the providers when
+    // it already has the pinned lyric by the time setTrack() runs.
+    applyPinFor(track);
     m_engine.setTrack(track);
+    updatePinState();
 }
 
 void LyricsController::onStatusChanged(kshadowlrc::PlaybackStatus status)

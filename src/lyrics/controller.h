@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -10,13 +11,17 @@
 
 #include "lyrics/localsource.h"
 #include "lyrics/lyricengine.h"
+#include "lyrics/pinstore.h"
 #include "lyrics/provider.h"
+
+#include <optional>
 
 namespace kshadowlrc
 {
 
 class KShadowLrcSettings;
 class LRCLibProvider;
+class LyricSearch;
 class NeteaseProvider;
 class PlayerTracker;
 
@@ -51,6 +56,9 @@ class LyricsController : public QObject
     Q_PROPERTY(QString lyricStatus READ lyricStatus NOTIFY lyricStatusChanged)
     Q_PROPERTY(int displayMode READ displayMode WRITE setDisplayMode NOTIFY displayModeChanged)
     Q_PROPERTY(qint64 lyricOffset READ lyricOffset WRITE setLyricOffset NOTIFY lyricOffsetChanged)
+    Q_PROPERTY(QString trackQuery READ trackQuery NOTIFY trackQueryChanged)
+    Q_PROPERTY(QString pinnedDescription READ pinnedDescription NOTIFY pinnedDescriptionChanged)
+    Q_PROPERTY(QString pinStatus READ pinStatus NOTIFY pinStatusChanged)
 
 public:
     explicit LyricsController(QObject *parent = nullptr);
@@ -75,6 +83,38 @@ public:
 
     int displayMode() const;
     qint64 lyricOffset() const;
+
+    /*!
+     * "title artist" of the playing track, or empty when nothing is playing.
+     * The search window prefills its field with it: a starting point the user
+     * edits, never a query that is run behind their back.
+     */
+    QString trackQuery() const;
+
+    /*!
+     * Where the pinned lyric of the playing track came from, in words, or empty
+     * when the track has no pin. A pin outranks the cache and every source.
+     */
+    QString pinnedDescription() const;
+
+    /*!
+     * What the last pin attempt has to say, or empty: that it is fetching, or
+     * why the choice could not be pinned. A diagnostic line, so the window
+     * shows it the way it shows lastError -- quietly, never as the headline.
+     * Success is not announced here; pinnedDescription() carries it.
+     */
+    QString pinStatus() const;
+
+    /*! The manual search this controller fans out to; QML binds to it directly. */
+    LyricSearch *search() const
+    {
+        return m_search;
+    }
+
+    /*! Pin the result at \p index of search()->results() to the playing track. */
+    Q_INVOKABLE void pinSearchResult(int index);
+    /*! Drop the pin of the playing track; normal resolution takes over again. */
+    Q_INVOKABLE void forgetPinnedLyric();
 
     /*! Engine accessor for the C++ integration lane. */
     LyricEngine *engine()
@@ -118,6 +158,9 @@ Q_SIGNALS:
     void lyricStatusChanged();
     void displayModeChanged();
     void lyricOffsetChanged();
+    void trackQueryChanged();
+    void pinnedDescriptionChanged();
+    void pinStatusChanged();
 
 private:
     void advanceDemo();
@@ -149,6 +192,28 @@ private:
     /*! Bring tracker, engine and settings offset back into agreement. */
     void applyConfiguredOffset();
 
+    /*!
+     * A pin is fetched asynchronously, so the request remembers what the user
+     * picked and which song they picked it for: by the time the lyric arrives,
+     * the player may well be on another track.
+     */
+    struct PendingPin {
+        TrackMeta track;
+        QString source;
+        QString provider;
+        QString songId;
+    };
+
+    void onPinLyricFinished(quint64 requestId, const QString &songId, const kshadowlrc::LyricStore &store);
+    void onPinLyricFailed(quint64 requestId, const QString &songId, const QString &error);
+    /*! Read the pin of \p track from the store and hand it to the engine. */
+    void applyPinFor(const TrackMeta &track);
+    /*! Recompose trackQuery and pinnedDescription after a track change. */
+    void updatePinState();
+    void setPinStatus(const QString &status);
+    /*! The provider a search row names, or null when we do not have it. */
+    LyricProvider *providerForName(const QString &name) const;
+
     void startClock();
     void stopClock();
 
@@ -159,8 +224,22 @@ private:
     LocalFiles m_localFiles;
     NeteaseProvider *m_netease = nullptr;
     LRCLibProvider *m_lrclib = nullptr;
+    // The manual search (the "search lyrics" window) is a second consumer of the
+    // same providers. It fans out one query and shows what each returns; it
+    // never picks for the user.
+    LyricSearch *m_search = nullptr;
     PlayerTracker *m_tracker = nullptr;
     KShadowLrcSettings *m_settings = nullptr;
+
+    // Pin state: which pin the current track has (none when it has no pin, or
+    // when the stored record carries no text), what the window shows about it,
+    // and the fetches in flight.
+    QHash<quint64, PendingPin> m_pendingPins;
+    quint64 m_nextPinRequestId = 1;
+    std::optional<pinstore::Pin> m_currentPin;
+    QString m_trackQuery;
+    QString m_pinnedDescription;
+    QString m_pinStatus;
 
     QTimer m_demoTimer;
     qint64 m_demoElapsed = 0;
