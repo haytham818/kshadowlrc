@@ -43,11 +43,15 @@ import org.kde.kirigami as Kirigami
  * is one player and writes only back into settings.ignoredPlayers: switching a
  * player on appends its full bus name, switching it off drops that name, and a
  * player caught by a wildcard or prefix rule is shown without a switch at all,
- * because there is no entry for that player alone to turn off. Entries that
- * answer to no running player stay listed underneath - a hand-written rule with
- * a Remove button, a player that has stopped with a switch - so both can be
- * dropped. Opening the window asks the tracker for a fresh scan, or the list
- * would be whatever it saw up to ten seconds ago.
+ * because there is no entry for that player alone to turn off. Entries that no
+ * player's name matches stay listed underneath, and which of the two kinds each
+ * one is is decided by whether it is catching a player right now - the shipped
+ * "org.mpris.MediaPlayer2.firefox" is a prefix of the bus name Firefox actually
+ * uses, so while Firefox runs that entry is a rule and not a player that has
+ * stopped. A rule can only be removed; a name no player is running keeps a
+ * switch, so ignoring it can be taken back without starting it again. Opening
+ * the window asks the tracker for a fresh scan, or the list would be whatever it
+ * saw up to ten seconds ago and those verdicts would be that stale too.
  *
  * The enum combo (which lyric line to show) binds its currentIndex straight to
  * the int the KConfigXT compiler generates, because kconfig_compiler emits
@@ -129,17 +133,31 @@ Kirigami.ApplicationWindow {
     // knownPlayersChanged whenever it re-scans.
     readonly property var knownPlayers: root.hasPlayerTracker ? playerTracker.knownPlayers : []
 
-    // The saved entries no visible player answers to: a player that is not
-    // running right now, or a rule written by hand. Listed under the running
-    // players so either can be taken off the list.
+    // The saved entries no visible player answers to: an entry no player's name
+    // matches. Listed under the running players so it can be taken off the list,
+    // whichever of the two kinds it turns out to be (see isPlayerRule()).
     function storedIgnoredPlayers() {
         const running = root.knownPlayers.map(entry => entry.name)
         return settings.ignoredPlayers.filter(entry => running.indexOf(entry) === -1)
     }
 
-    // A saved entry with a * or ? is a glob over the whole bus name, as the
-    // kcfg entry says; anything else names one player.
-    function isPlayerPattern(entry) {
+    // The ignore entries that are catching a player the tracker can see right
+    // now: the non-empty `rule` it reports for each of them. An entry in here is
+    // in force, and that is what makes it a rule rather than a player name.
+    readonly property var activeRules: root.knownPlayers.map(player => player.rule).filter(rule => rule.length > 0)
+
+    // Whether a saved entry that no player is named after is a rule or the name
+    // of a player that is not running. Being in force decides it, not how the
+    // entry is spelled: the shipped "org.mpris.MediaPlayer2.firefox" is a
+    // dot-boundary prefix, so while Firefox runs - under
+    // "org.mpris.MediaPlayer2.firefox.instance1" - that entry is a rule doing its
+    // work, with no wildcard anywhere in it. Only an entry that catches nothing
+    // at the moment is judged by its shape, because a glob is all a reader has to
+    // go on when no player is there to be caught by it.
+    function isPlayerRule(entry) {
+        if (root.activeRules.indexOf(entry) !== -1) {
+            return true
+        }
         return entry.indexOf("*") !== -1 || entry.indexOf("?") !== -1
     }
 
@@ -773,9 +791,10 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
-                // Entries no running player answers to. A hand-written rule can
-                // only be removed; a player that has stopped keeps its switch, so
-                // ignoring it can be undone without starting it again.
+                // Entries no running player's name matches. Which of the two
+                // kinds each one is comes from isPlayerRule(): a rule can only
+                // be removed, while a player that has stopped keeps its switch,
+                // so ignoring it can be undone without starting it again.
                 Repeater {
                     id: storedPlayerRepeater
                     objectName: "storedPlayerRepeater"
@@ -788,7 +807,7 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         spacing: Kirigami.Units.smallSpacing
 
-                        readonly property bool isPattern: root.isPlayerPattern(storedPlayerRow.modelData)
+                        readonly property bool isRule: root.isPlayerRule(storedPlayerRow.modelData)
 
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -800,8 +819,11 @@ Kirigami.ApplicationWindow {
                                 elide: Text.ElideMiddle
                             }
 
+                            // Only for a player that has stopped: an entry that is
+                            // catching a running player is not one, and calling it
+                            // "not running" would be wrong about it.
                             QQC2.Label {
-                                visible: !storedPlayerRow.isPattern
+                                visible: !storedPlayerRow.isRule
                                 text: i18n("Not running")
                                 font: Kirigami.Theme.smallFont
                                 opacity: 0.7
@@ -810,7 +832,7 @@ Kirigami.ApplicationWindow {
 
                         Loader {
                             Layout.alignment: Qt.AlignVCenter
-                            active: storedPlayerRow.isPattern
+                            active: storedPlayerRow.isRule
                             sourceComponent: Component {
                                 QQC2.Button {
                                     objectName: "storedPlayerRemove"
@@ -823,7 +845,7 @@ Kirigami.ApplicationWindow {
 
                         Loader {
                             Layout.alignment: Qt.AlignVCenter
-                            active: !storedPlayerRow.isPattern
+                            active: !storedPlayerRow.isRule
                             sourceComponent: Component {
                                 QQC2.Switch {
                                     objectName: "storedPlayerSwitch"

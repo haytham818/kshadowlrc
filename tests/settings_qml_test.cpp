@@ -19,10 +19,14 @@
 // gets a switch that is off and writes its full bus name when flipped, a player
 // an exact entry names gets a switch that is on and drops that name when
 // flipped, and a player caught by a wildcard rule gets no switch but the rule
-// spelled out. Entries no running player answers to are pinned too: a player
-// that has stopped keeps a switch, a hand-written rule only a Remove button.
-// The window asks the tracker for a fresh scan as it opens, which the stand-in
-// counts.
+// spelled out. Entries no running player's name matches are pinned too: a player
+// that has stopped keeps a switch, a rule only a Remove button. Which of those
+// two an entry is comes from whether it is catching a player right now, so the
+// shipped "org.mpris.MediaPlayer2.firefox" - a prefix of the bus name Firefox
+// actually uses, and a perfect look-alike for a player name - is pinned as the
+// rule it is while that player runs, and as a player that is not running once it
+// stops. The window asks the tracker for a fresh scan as it opens, which the
+// stand-in counts.
 //
 // XDG_CONFIG_HOME and XDG_CONFIG_DIRS point at a private temporary directory
 // before the first KSharedConfig is opened, so the developer's real
@@ -74,16 +78,22 @@ const char kOutputFallbackHint[] = "That output is not connected; the overlay is
 // objectName but pinned by text; keep the two in step if the wording changes.
 const char kNoPlayersHint[] = "No MPRIS player is running right now.";
 
-// The bus names and the one hand-written rule the player fixture is built from,
+// The bus names and the hand-written rules the player fixture is built from,
 // written out once so a check that a switch writes "the full bus name" reads the
 // same string its row was built from. The two shipped defaults live in the
-// settings file's own entry (see kshadowlrcsettings.kcfg); the pattern is put on
-// top of them by this test.
+// settings file's own entry (see kshadowlrcsettings.kcfg); the patterns are put
+// on top of them by this test.
 const QString kFirefox = QStringLiteral("org.mpris.MediaPlayer2.firefox");
 const QString kPlayerctld = QStringLiteral("org.mpris.MediaPlayer2.playerctld");
 const QString kMpv = QStringLiteral("org.mpris.MediaPlayer2.mpv");
 const QString kVlc = QStringLiteral("org.mpris.MediaPlayer2.vlc");
 const QString kMpvPattern = QStringLiteral("org.mpris.MediaPlayer2.mpv*");
+const QString kSpotifyPattern = QStringLiteral("org.mpris.MediaPlayer2.spotify*");
+
+// The bus name Firefox really uses while it runs: the shipped kFirefox entry is
+// a dot-boundary prefix of it, and that is the whole difficulty - the entry has
+// no wildcard in it, so it looks exactly like a player name.
+const QString kFirefoxInstance = kFirefox + QStringLiteral(".instance1");
 
 // One player row's labels, as src/qml/settings.qml writes them.
 const QString kFollowingHint = QStringLiteral("Following");
@@ -209,6 +219,7 @@ private Q_SLOTS:
     void placementRows();
     void outputPicker();
     void ignoredPlayersEditor();
+    void ignoredPlayerClassification();
 
 private:
     std::unique_ptr<Settings> m_settings;
@@ -737,6 +748,120 @@ void SettingsQmlTest::ignoredPlayersEditor()
     QVERIFY2(runningRows().length() == 3, "the rows follow the tracker's list");
     QVERIFY2(storedRows().length() == 2, "and so do the saved entries");
     QVERIFY2(!visible(emptyLabel), "the empty state hides again");
+}
+
+void SettingsQmlTest::ignoredPlayerClassification()
+{
+    // The fixture is the shipped pair in the shape that is easy to get wrong:
+    // Firefox runs under a bus name of its own, so "org.mpris.MediaPlayer2.firefox"
+    // is a prefix of a running player and not a player that is not running. The
+    // two entries under it are the controls: a name no player is running, and a
+    // glob nothing matches at all.
+    m_tracker.setKnownPlayers(QVariantList{
+        knownPlayer(kFirefoxInstance, QStringLiteral("Firefox"), kFirefox, true),
+    });
+    m_settings->setIgnoredPlayers(QStringList({kFirefox, kVlc, kSpotifyPattern}));
+
+    const auto runningRows = [this] {
+        return rowsOf(QStringLiteral("runningPlayerRepeater"), QStringLiteral("runningPlayerRow"));
+    };
+    const auto storedRows = [this] {
+        return rowsOf(QStringLiteral("storedPlayerRepeater"), QStringLiteral("storedPlayerRow"));
+    };
+    const auto childNamed = [](QObject *object, const QString &name) {
+        return object != nullptr ? object->findChild<QObject *>(name) : nullptr;
+    };
+    const auto shown = [](QObject *object) {
+        return object != nullptr && object->property("visible").toBool();
+    };
+    // What a row offers right now. The two controls of a saved entry live in
+    // Loaders, and a Loader that has been active keeps its item object alive
+    // until the event loop gets around to deleting it - which a test's loop never
+    // does. An entry can also change kind while the window is up, so this asks
+    // what the row shows rather than what happens to exist.
+    const auto offers = [&childNamed, &shown](QObject *row, const QString &name) {
+        return shown(childNamed(row, name));
+    };
+    const auto ruleText = [](const QString &rule) {
+        return QStringLiteral("Ignored by the rule “%1”").arg(rule);
+    };
+
+    // The player the prefix entry catches: the rule is said out loud, and the row
+    // offers no switch, because turning that one entry off would stop ignoring
+    // every other player the prefix catches as well.
+    QList<QObject *> running = runningRows();
+    QVERIFY2(running.length() == 1, "the player Firefox turned out to be is listed");
+    if (running.length() != 1) {
+        return;
+    }
+    QObject *playerRow = running.at(0);
+    QVERIFY2(labelWithText(playerRow, QStringLiteral("Firefox")) != nullptr, "the player row shows the player's own label");
+    QVERIFY2(labelWithText(playerRow, kFirefoxInstance) != nullptr, "the player row shows the bus name the player really uses");
+    QVERIFY2(!offers(playerRow, QStringLiteral("runningPlayerSwitch")), "a player caught by the shipped prefix entry gets no switch");
+    QObject *playerRule = labelWithText(playerRow, ruleText(kFirefox));
+    QVERIFY2(playerRule != nullptr, "the player row names the entry that catches it");
+    QVERIFY2(shown(playerRule), "and says so instead of offering a switch");
+
+    QList<QObject *> stored = storedRows();
+    QVERIFY2(stored.length() == 3, "the entries no player's name matches are listed under the players");
+    if (stored.length() != 3) {
+        return;
+    }
+
+    // The entry that is catching the player above: a rule doing its work, not a
+    // player that has stopped, even though there is no wildcard in it.
+    QObject *firefoxEntry = stored.at(0);
+    QVERIFY2(labelWithText(firefoxEntry, kFirefox) != nullptr, "the entry that catches Firefox is listed as written");
+    QVERIFY2(offers(firefoxEntry, QStringLiteral("storedPlayerRemove")), "an entry in force is taken off the list, not switched off");
+    QVERIFY2(!offers(firefoxEntry, QStringLiteral("storedPlayerSwitch")), "an entry in force is offered no switch");
+    QObject *firefoxNotRunning = labelWithText(firefoxEntry, kNotRunningHint);
+    QVERIFY2(firefoxNotRunning != nullptr, "a saved row carries the not-running line, shown or not");
+    QVERIFY2(!shown(firefoxNotRunning), "an entry that is catching a running player is not called one that is not running");
+
+    // Control: a name no running player answers to is a player that is not
+    // running, switch and all.
+    QObject *vlcEntry = stored.at(1);
+    QVERIFY2(labelWithText(vlcEntry, kVlc) != nullptr, "the player nobody is running is listed by its bus name");
+    QVERIFY2(shown(labelWithText(vlcEntry, kNotRunningHint)), "a name no player answers to is marked as not running");
+    QObject *vlcSwitch = childNamed(vlcEntry, QStringLiteral("storedPlayerSwitch"));
+    QVERIFY2(shown(vlcSwitch), "and it keeps a switch, so ignoring it can be undone");
+    QVERIFY2(vlcSwitch && vlcSwitch->property("checked").toBool(), "the switch is on, the entry is there");
+    QVERIFY2(!offers(vlcEntry, QStringLiteral("storedPlayerRemove")), "a player name is not offered a Remove button");
+
+    // Control: a glob nothing matches is still a rule. It is not in force, so its
+    // shape is all there is to go on, and a glob is never a player's name.
+    QObject *patternEntry = stored.at(2);
+    QVERIFY2(labelWithText(patternEntry, kSpotifyPattern) != nullptr, "a glob matching nothing is listed as written");
+    QVERIFY2(offers(patternEntry, QStringLiteral("storedPlayerRemove")), "a glob is taken off the list, not switched off");
+    QVERIFY2(!offers(patternEntry, QStringLiteral("storedPlayerSwitch")), "a glob is offered no switch");
+    QObject *patternNotRunning = labelWithText(patternEntry, kNotRunningHint);
+    QVERIFY2(patternNotRunning != nullptr, "a glob row carries the not-running line, shown or not");
+    QVERIFY2(!shown(patternNotRunning), "a glob is not a player and is not called one");
+
+    // What decides the two is the tracker, not the spelling: with Firefox off the
+    // bus the very same entry is no longer in force, so it is a name no player is
+    // running, with a switch to drop it.
+    m_tracker.setKnownPlayers(QVariantList());
+    QVERIFY2(runningRows().isEmpty(), "with the player gone there is no player row");
+    QList<QObject *> idle = storedRows();
+    QVERIFY2(idle.length() == 3, "the entries are all still listed");
+    if (idle.length() != 3) {
+        return;
+    }
+    QObject *idleFirefox = idle.at(0);
+    QObject *idleSwitch = childNamed(idleFirefox, QStringLiteral("storedPlayerSwitch"));
+    QVERIFY2(shown(idleSwitch), "the entry out of force is a name with a switch now");
+    QVERIFY2(idleSwitch && idleSwitch->property("checked").toBool(), "the switch is on, the entry is still there");
+    QVERIFY2(!offers(idleFirefox, QStringLiteral("storedPlayerRemove")), "and it is not a rule any more");
+    QVERIFY2(shown(labelWithText(idleFirefox, kNotRunningHint)), "it is a player that is not running now");
+
+    // Put the shared fixture back for anyone reading the file's state afterwards.
+    m_tracker.setKnownPlayers(QVariantList{
+        knownPlayer(kFirefox, QStringLiteral("Firefox"), kFirefox, false),
+        knownPlayer(kMpv, QStringLiteral("mpv"), kMpvPattern, false),
+        knownPlayer(kVlc, QStringLiteral("VLC media player"), QString(), true),
+    });
+    m_settings->setIgnoredPlayers(QStringList({kFirefox, kPlayerctld, kMpvPattern}));
 }
 
 int main(int argc, char **argv)
