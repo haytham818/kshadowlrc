@@ -315,9 +315,17 @@ void OverlayWindow::beginDrag(bool handlesFont)
 
     m_dragging = true;
     m_dragHandlesFont = handlesFont;
-    // Global screen coordinates: the surface follows the cursor, so its own
-    // local coordinates would barely move and the drag would stall or jitter.
+    // The origin of the gesture in whatever coordinates Qt reports the pointer
+    // in -- see the class comment: under Wayland that is the window origin Qt
+    // believes in plus the pointer's place inside the surface, not a screen
+    // position. The gestures work from the difference against this value.
     m_dragOriginCursor = QCursor::pos();
+    // One line per gesture, and the only place the drag says where it thinks the
+    // pointer is. Reading it back together with the window's believed position
+    // and the screen tells a real screen position apart from that offset one
+    // when a drag misbehaves; no code reads these values.
+    qCDebug(lcOverlay) << "drag begin: cursor" << m_dragOriginCursor << "window" << position() << "screen" << (m_screen ? m_screen->geometry() : QRect())
+                       << "dpr" << devicePixelRatio() << "handlesFont" << handlesFont;
     // The point at grab time is the frame of reference the position gesture is
     // compared against on release.
     m_dragStartPlacement = m_placement;
@@ -331,8 +339,8 @@ void OverlayWindow::beginDrag(bool handlesFont)
         m_dragBox = adjustmentBox();
     }
 
-    // Take the drag over from QML's translation signal: read the global cursor
-    // ourselves until the drag ends.
+    // Take the drag over from QML's translation signal: read the reported
+    // pointer position ourselves until the drag ends.
     m_dragPoll.start();
 }
 
@@ -435,6 +443,21 @@ void OverlayWindow::applyAnchors()
     m_pushedAnchors = state.anchors;
     m_pushedMargins = state.margins;
     m_anchorsPushed = true;
+
+    // The layer-shell state just pushed is double-buffered: the compositor only
+    // applies it from a wl_surface.commit. LayerShellQt's setters merely send the
+    // raw set_anchor/set_margin requests -- they never commit -- so without this
+    // the new margins would wait for Qt's next rendered frame. During a position
+    // drag the scene is deliberately frozen (applyContentSize()) and no frame
+    // repaints on a margin change, so the surface would trail the pointer and
+    // then catch up. A commit without a new buffer is legal and enough: it makes
+    // a Content Update from the pending state even when that state was "not
+    // touched" by the render, so the property-only change lands immediately.
+    // commitSurface() is guarded by isExposed() so that before the first map --
+    // when the shell integration owns the surface's commits and a manual one
+    // would be wrong -- this is a no-op; that is exactly the guard the helper
+    // already documents for the input region.
+    commitSurface();
 }
 
 void OverlayWindow::applyInputRegion(bool force)

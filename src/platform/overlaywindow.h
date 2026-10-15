@@ -35,11 +35,20 @@ namespace kshadowlrc
  *
  * In adjusting mode the surface instead takes pointer input, asks for keyboard
  * interactivity OnDemand so Esc can arrive, and lets the user drag its position
- * and font size. That drag is driven by the window's own poll of the global
- * cursor, not by QML's translation delta: the surface follows the pointer, so
- * the pointer barely moves within the window and that signal is no trigger for
- * a smooth drag (see m_dragPoll). That mode is runtime-only: it never reaches
- * the settings file.
+ * and font size. That drag is driven by the window's own poll of the reported
+ * pointer position, not by QML's translation delta: the surface follows the
+ * pointer, so the pointer barely moves within the window and that signal is no
+ * trigger for a smooth drag (see m_dragPoll). A changed anchor set is committed
+ * to the compositor as soon as it is pushed rather than left to the next
+ * rendered frame (see applyAnchors()). That mode is runtime-only: it never
+ * reaches the settings file.
+ *
+ * The drag reads QCursor::pos(). Under Wayland Qt builds that value from the
+ * pointer's surface-local coordinates plus the window origin Qt believes in,
+ * and a layer surface is never told its real position, so the absolute value is
+ * offset from the true screen position and a difference across a gesture also
+ * carries whatever the surface itself moved by. Know that before adding more
+ * arithmetic on top of it.
  */
 class OverlayWindow : public QQuickView
 {
@@ -242,7 +251,12 @@ private:
      * lives on the wl_surface that went away with the old platform window.
      */
     void applyInputRegion(bool force = false);
-    /*! Commit the raw wl_surface so a changed input region takes effect now. */
+    /*!
+     * Commit the raw wl_surface so a just-pushed input region or layer-shell
+     * state (anchors/margins) takes effect now, without waiting for Qt's next
+     * rendered frame. A no-op before the surface is exposed, when the shell
+     * integration still owns its commits.
+     */
     void commitSurface();
     /*! Resolve the configured output against the live screen list and apply it. */
     void resolveOutput();

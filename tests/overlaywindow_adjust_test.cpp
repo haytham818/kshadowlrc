@@ -7,9 +7,12 @@
 // is no layer surface to position, so the assertions are all against the
 // window's own members and getters -- the input region, the requested keyboard
 // interactivity, the placement point and the surface size it last pushed --
-// never against anything a compositor would do. XDG_CONFIG_HOME points at a
-// private temporary directory so the settings writes under test cannot reach the
-// developer's real kshadowlrcrc.
+// never against anything a compositor would do. The layer-shell state the window
+// pushes (anchors, margins) is read back from its LayerShellQt::Window instead.
+// A commit is not: commitSurface() returns early while the window is unexposed,
+// and offscreen it never is, so every commit is skipped here. XDG_CONFIG_HOME
+// points at a private temporary directory so the settings writes under test
+// cannot reach the developer's real kshadowlrcrc.
 //
 // The offscreen cursor cannot move, so a drag through the public API is always
 // motionless here: that is what the "a motionless click emits nothing" checks
@@ -49,6 +52,7 @@ private Q_SLOTS:
     void releasedDragWritesThePlacementOnce();
     void frozenSurfaceDuringPositionDrag();
     void dragPollLivesExactlyAsLongAsTheDrag();
+    void repeatedPlacementPushesTheSameLayerStateOnce();
 };
 
 void OverlayWindowAdjustTest::enteringOverridesClickThroughAndKeyboard()
@@ -284,6 +288,76 @@ void OverlayWindowAdjustTest::dragPollLivesExactlyAsLongAsTheDrag()
     QVERIFY(!overlay.dragPolling());
     overlay.endDrag();
     QVERIFY(!overlay.dragPolling());
+}
+
+void OverlayWindowAdjustTest::repeatedPlacementPushesTheSameLayerStateOnce()
+{
+    // 9. applyAnchors() now commits the surface right after it pushes the anchor
+    //    set, so the compositor sees new margins without waiting for a rendered
+    //    frame. That commit is not observable here: commitSurface() returns early
+    //    while !isExposed(), and the offscreen platform never exposes the window,
+    //    so this test cannot assert it -- like the input-region commits in the
+    //    tests above, it is simply skipped. What is asserted instead is that the
+    //    placement path still reaches the same layer state: the anchors and
+    //    margins the LayerShellQt::Window holds match what the placement maths
+    //    dictate, and re-driving the path with an unchanged placement (or an
+    //    identical content size) pushes nothing again, so the cache is intact and
+    //    no commit can fire for a state that did not move. Cases 3, 6 and 7
+    //    already cover the placement point, the frozen drag box and the pushed
+    //    surface size, so they are not repeated here.
+    OverlayWindow overlay;
+    auto *layerWindow = LayerShellQt::Window::get(&overlay);
+    QVERIFY(layerWindow);
+
+    int anchorPushes = 0;
+    int marginPushes = 0;
+    QObject::connect(layerWindow, &LayerShellQt::Window::anchorsChanged, &overlay, [&anchorPushes] {
+        ++anchorPushes;
+    });
+    QObject::connect(layerWindow, &LayerShellQt::Window::marginsChanged, &overlay, [&marginPushes] {
+        ++marginPushes;
+    });
+
+    overlay.setContentSize(400, 100);
+    overlay.beginAdjusting();
+
+    // The anchors/margins applyAnchors() derives for the current placement, using
+    // the same public helpers and the screen the window actually resolved (the
+    // offscreen platform may or may not provide one).
+    const auto expectedState = [&overlay] {
+        const QSize screen = overlay.screen() ? overlay.screen()->geometry().size() : QSize();
+        const QPoint topLeft = placementBoxTopLeft(overlay.placement(), overlay.adjustmentBox(), screen);
+        return anchorsFor(topLeft, OverlayWindow::AdjustPadding);
+    };
+
+    // A placement that really moves pushes its anchors and margins.
+    overlay.setPlacement(Placement{30.0, 70.0});
+    PlacementAnchors expected = expectedState();
+    QCOMPARE(layerWindow->anchors(), expected.anchors);
+    QCOMPARE(layerWindow->margins(), expected.margins);
+    const int anchorPushesAfterMove = anchorPushes;
+    const int marginPushesAfterMove = marginPushes;
+
+    // The same placement again: the setter compares and does no work.
+    overlay.setPlacement(Placement{30.0, 70.0});
+    QCOMPARE(anchorPushes, anchorPushesAfterMove);
+    QCOMPARE(marginPushes, marginPushesAfterMove);
+
+    // Re-applying an identical content size re-runs applyAnchors() through
+    // applyContentSize(); the unchanged state must not be pushed or committed
+    // again.
+    overlay.setContentSize(400, 100);
+    QCOMPARE(anchorPushes, anchorPushesAfterMove);
+    QCOMPARE(marginPushes, marginPushesAfterMove);
+    QCOMPARE(layerWindow->anchors(), expected.anchors);
+    QCOMPARE(layerWindow->margins(), expected.margins);
+
+    // A later real move still lands on the layer state the maths dictate.
+    overlay.setPlacement(Placement{60.0, 20.0});
+    expected = expectedState();
+    QCOMPARE(overlay.placement(), (Placement{60.0, 20.0}));
+    QCOMPARE(layerWindow->anchors(), expected.anchors);
+    QCOMPARE(layerWindow->margins(), expected.margins);
 }
 
 int main(int argc, char **argv)
