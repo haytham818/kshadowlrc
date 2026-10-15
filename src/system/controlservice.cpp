@@ -58,6 +58,11 @@ QString settingsId()
     return QStringLiteral("settings");
 }
 
+QString searchId()
+{
+    return QStringLiteral("search");
+}
+
 QString quitId()
 {
     return QStringLiteral("quit");
@@ -143,6 +148,13 @@ void ControlService::createActions()
     connect(toggle, &QAction::triggered, this, &ControlService::overlayVisibilityToggleRequested);
     m_actions.insert(toggle->objectName(), toggle);
 
+    // Searching for a lyric yourself: the way out when the automatic match
+    // picked the wrong one, or found none at all.
+    auto *search = new QAction(i18nc("@action global shortcut", "Search lyrics…"), this);
+    search->setObjectName(searchId());
+    connect(search, &QAction::triggered, this, &ControlService::searchRequested);
+    m_actions.insert(search->objectName(), search);
+
     auto *settings = new QAction(i18nc("@action global shortcut", "Configure KShadowLrc…"), this);
     settings->setObjectName(settingsId());
     connect(settings, &QAction::triggered, this, &ControlService::settingsRequested);
@@ -163,6 +175,7 @@ void ControlService::createTray()
     m_menu->addAction(m_actions.value(offsetLaterId()));
     m_menu->addAction(m_actions.value(offsetResetId()));
     m_menu->addSeparator();
+    m_menu->addAction(m_actions.value(searchId()));
     m_menu->addAction(m_actions.value(settingsId()));
     m_menu->addSeparator();
     m_menu->addAction(m_actions.value(quitId()));

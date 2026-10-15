@@ -62,6 +62,8 @@ public Q_SLOTS:
 Q_SIGNALS:
     /*! The user asked for the settings window; the parent opens it. */
     void settingsRequested();
+    /*! The user asked for the lyric search window; the parent opens it. */
+    void searchRequested();
     /*! The user asked to show/hide the overlay; the parent owns the surface. */
     void overlayVisibilityToggleRequested();
     /*! The user asked the application to quit. */

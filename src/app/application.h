@@ -58,6 +58,8 @@ private:
     void createControlService();
     /*! Show the settings window, loading it on first use. */
     void openSettingsWindow();
+    /*! Show the manual lyric search window, loading it on first use. */
+    void openSearchWindow();
 
     std::unique_ptr<OverlayWindow> m_overlay;
     std::unique_ptr<LyricsController> m_lyricsController;
@@ -65,6 +67,8 @@ private:
     std::unique_ptr<ControlService> m_controlService;
     /*! The settings window's QML engine; created the first time it is opened. */
     std::unique_ptr<QQmlApplicationEngine> m_settingsEngine;
+    /*! The search window's QML engine; created the first time it is opened. */
+    std::unique_ptr<QQmlApplicationEngine> m_searchEngine;
     KShadowLrcSettings *m_settings = nullptr;
     /*!
      * True when --output was given: it then decides the initial output instead of

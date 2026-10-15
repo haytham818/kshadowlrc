@@ -6,6 +6,7 @@
 #include "config/settings.h"
 #include "kshadowlrc.h"
 #include "lyrics/controller.h"
+#include "lyrics/lyricsearch.h"
 #include "platform/outputs.h"
 #include "platform/overlaywindow.h"
 #include "player/playertracker.h"
@@ -145,6 +146,7 @@ void Application::createControlService()
     m_controlService = std::make_unique<ControlService>(m_lyricsController.get());
 
     connect(m_controlService.get(), &ControlService::settingsRequested, this, &Application::openSettingsWindow);
+    connect(m_controlService.get(), &ControlService::searchRequested, this, &Application::openSearchWindow);
     connect(m_controlService.get(), &ControlService::overlayVisibilityToggleRequested, this, [this] {
         const bool visible = !m_overlay->isVisible();
         m_overlay->setVisible(visible);
@@ -197,6 +199,42 @@ void Application::openSettingsWindow()
         window->raise();
         window->requestActivate();
         qCInfo(lcApp) << "settings window shown";
+    }
+}
+
+void Application::openSearchWindow()
+{
+    if (!m_searchEngine) {
+        m_searchEngine = std::make_unique<QQmlApplicationEngine>();
+        installLocalization(m_searchEngine.get());
+        // The window asks the controller who is playing and hands the chosen row
+        // back to it to pin; the fan-out that produced the rows is the controller's
+        // own search object, so both are set before load().
+        m_searchEngine->rootContext()->setContextProperty(QStringLiteral("lyricsController"), m_lyricsController.get());
+        m_searchEngine->rootContext()->setContextProperty(QStringLiteral("lyricSearch"), m_lyricsController->search());
+
+        connect(m_searchEngine.get(), &QQmlApplicationEngine::warnings, this, [](const QList<QQmlError> &warnings) {
+            for (const QQmlError &warning : warnings) {
+                qCWarning(lcApp) << "Search window QML:" << warning.toString();
+            }
+        });
+
+        m_searchEngine->load(QUrl(QStringLiteral("qrc:/qml/search.qml")));
+
+        if (m_searchEngine->rootObjects().isEmpty()) {
+            qCCritical(lcApp) << "the search window could not be loaded";
+            m_searchEngine.reset();
+            return;
+        }
+        qCInfo(lcApp) << "search window loaded";
+    }
+
+    auto *window = qobject_cast<QQuickWindow *>(m_searchEngine->rootObjects().constFirst());
+    if (window) {
+        window->show();
+        window->raise();
+        window->requestActivate();
+        qCInfo(lcApp) << "search window shown";
     }
 }
 

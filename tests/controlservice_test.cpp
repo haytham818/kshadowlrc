@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: 2026 KShadowLrc Contributors
 
 // Offline checks for ControlService: the tray icon plus the global shortcuts
-// that nudge the lyric offset, and the show/hide, settings and quit requests.
+// that nudge the lyric offset, and the show/hide, settings, search and quit
+// requests.
 //
 // It proves, without any GUI and without touching the developer's desktop:
 //   - every documented action resolves, and an unknown id is null;
 //   - the offset step/clamp/reset rules through the very actions the menu and
 //     the shortcuts trigger, and that the value is persisted in the settings;
-//   - the settings/quit/overlay-toggle requests fire exactly once each;
+//   - the settings/search/quit/overlay-toggle requests fire exactly once each;
 //   - setOverlayVisible() re-labels the toggle action;
 //   - the tray tool tip carries the lyric state above the offset, follows every
 //     state change through the controller, and puts the failure diagnostic on
@@ -59,6 +60,7 @@ const QString kLater = QStringLiteral("lyrics-offset-later");
 const QString kReset = QStringLiteral("lyrics-offset-reset");
 const QString kToggle = QStringLiteral("toggle-overlay");
 const QString kSettings = QStringLiteral("settings");
+const QString kSearch = QStringLiteral("search");
 const QString kQuit = QStringLiteral("quit");
 
 /*!
@@ -145,6 +147,7 @@ private:
     QAction *m_reset = nullptr;
     QAction *m_toggle = nullptr;
     QAction *m_settingsAction = nullptr;
+    QAction *m_searchAction = nullptr;
     QAction *m_quit = nullptr;
     KStatusNotifierItem *m_tray = nullptr;
 };
@@ -160,6 +163,7 @@ ControlServiceTest::ControlServiceTest()
     m_reset = m_service.action(kReset);
     m_toggle = m_service.action(kToggle);
     m_settingsAction = m_service.action(kSettings);
+    m_searchAction = m_service.action(kSearch);
     m_quit = m_service.action(kQuit);
 
     // The tray is a child of the service; finding it is how the test reaches
@@ -170,12 +174,15 @@ ControlServiceTest::ControlServiceTest()
 void ControlServiceTest::actionsResolve()
 {
     // 1. Every documented action exists and is the live one; an unknown id is
-    //    null rather than a dangling pointer.
+    //    null rather than a dangling pointer. The search entry is what opens the
+    //    manual-search window, and its text is what the tray shows for it.
     QVERIFY(m_earlier != nullptr);
     QVERIFY(m_later != nullptr);
     QVERIFY(m_reset != nullptr);
     QVERIFY(m_toggle != nullptr);
     QVERIFY(m_settingsAction != nullptr);
+    QVERIFY(m_searchAction != nullptr);
+    QVERIFY(m_searchAction->text() == QStringLiteral("Search lyrics…"));
     QVERIFY(m_quit != nullptr);
     QVERIFY(m_service.action(QStringLiteral("nope")) == nullptr);
     QVERIFY(m_earlier->objectName() == kEarlier);
@@ -249,10 +256,14 @@ void ControlServiceTest::requestsFireExactlyOnce()
 {
     // 6. Each request signal fires exactly once per trigger.
     int settingsCount = 0;
+    int searchCount = 0;
     int quitCount = 0;
     int toggleCount = 0;
     QObject::connect(&m_service, &ControlService::settingsRequested, &m_service, [&settingsCount] {
         ++settingsCount;
+    });
+    QObject::connect(&m_service, &ControlService::searchRequested, &m_service, [&searchCount] {
+        ++searchCount;
     });
     QObject::connect(&m_service, &ControlService::quitRequested, &m_service, [&quitCount] {
         ++quitCount;
@@ -263,6 +274,8 @@ void ControlServiceTest::requestsFireExactlyOnce()
 
     m_settingsAction->trigger();
     QVERIFY(settingsCount == 1);
+    m_searchAction->trigger();
+    QVERIFY(searchCount == 1);
     m_quit->trigger();
     QVERIFY(quitCount == 1);
     m_toggle->trigger();
@@ -305,24 +318,26 @@ void ControlServiceTest::trayToolTipAndSharedMenu()
     QVERIFY(m_controller.lyricOffset() == 0);
     QVERIFY(m_tray->toolTipSubTitle() == QStringLiteral("Nothing is playing.\nOffset: 0"));
 
-    //    The context menu holds exactly the six documented actions, in order,
-    //    with the three separators between the groups -- and those six entries
+    //    The context menu holds exactly the seven documented actions, in order,
+    //    with the three separators between the groups -- and those seven entries
     //    are the very QAction instances action() returns, which is what "the
-    //    menu and the shortcuts share one action" means.
+    //    menu and the shortcuts share one action" means. The search window sits
+    //    next to the settings window: they are the two that open one.
     QMenu *menu = m_tray->contextMenu();
     QVERIFY(menu != nullptr);
     const QList<QAction *> entries = menu ? menu->actions() : QList<QAction *>();
-    QVERIFY(entries.size() == 9);
-    if (entries.size() == 9) {
+    QVERIFY(entries.size() == 10);
+    if (entries.size() == 10) {
         QVERIFY(entries.at(0) == m_toggle);
         QVERIFY(entries.at(1)->isSeparator());
         QVERIFY(entries.at(2) == m_earlier);
         QVERIFY(entries.at(3) == m_later);
         QVERIFY(entries.at(4) == m_reset);
         QVERIFY(entries.at(5)->isSeparator());
-        QVERIFY(entries.at(6) == m_settingsAction);
-        QVERIFY(entries.at(7)->isSeparator());
-        QVERIFY(entries.at(8) == m_quit);
+        QVERIFY(entries.at(6) == m_searchAction);
+        QVERIFY(entries.at(7) == m_settingsAction);
+        QVERIFY(entries.at(8)->isSeparator());
+        QVERIFY(entries.at(9) == m_quit);
     }
 }
 
