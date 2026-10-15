@@ -217,6 +217,18 @@ public:
     Q_INVOKABLE void endDrag();
 
     /*!
+     * Qt reports one wheel notch as 120 (eighths of a degree), and
+     * nudgeFontSize() takes the same unit, so a caller can pass
+     * QQuickWheelEvent::angleDelta().y() straight through.
+     */
+    static constexpr int WheelUnitsPerNotch = 120;
+    /*!
+     * Adjust the font size from a wheel turn over the block while adjusting.
+     * \p angleDelta is in Qt's wheel units (see WheelUnitsPerNotch).
+     */
+    Q_INVOKABLE void nudgeFontSize(int angleDelta);
+
+    /*!
      * Called from QML when the lyric layout changes, so the layer surface sizes
      * itself to the rendered lyrics on its free axis. It always receives the
      * text's size, never the adjusting padding.
@@ -309,6 +321,10 @@ private:
     // Adjusting mode. None of this reaches the settings file.
     bool m_adjusting = false;
     int m_adjustingFontSize = 0;
+    // Wheel units banked since the last whole notch (see nudgeFontSize()). A
+    // trackpad reports less than a notch at a time, and a signed accumulator lets
+    // a reversal cancel what was banked.
+    int m_fontWheelUnits = 0;
     bool m_dragging = false;
     bool m_dragHandlesFont = false;
     QPoint m_dragOriginCursor;

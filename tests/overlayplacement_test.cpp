@@ -38,6 +38,7 @@ private Q_SLOTS:
     void anchorsAlwaysTopLeft();
     void paddingShiftsTheSurfaceMargins();
     void fontDragGrowsDownwardAndClamps();
+    void fontWheelStepsProportionallyWithAFloorPerNotch();
     void onePointHoldsForAnyBoxSize();
     void positionDragFollowsTheReportedPointerExactly();
 };
@@ -161,6 +162,43 @@ void OverlayPlacementTest::fontDragGrowsDownwardAndClamps()
     QCOMPARE(fontSizeForDrag(32, QPointF(0, -200)), 8);
     QCOMPARE(fontSizeForDrag(100, QPointF(0, 400)), 160);
     QCOMPARE(fontSizeForDrag(32, QPointF(0, -400)), 8);
+}
+
+void OverlayPlacementTest::fontWheelStepsProportionallyWithAFloorPerNotch()
+{
+    // 8. A wheel notch scales the size by 5 %, the corner handle's proportional
+    //    feel. One notch on 32 pt: 32 x 1.05 = 33.6 -> 34, and 32 x 0.95 = 30.4
+    //    -> 30. No clamp is in play at this size.
+    QCOMPARE(fontSizeForWheel(32, 1), 34);
+    QCOMPARE(fontSizeForWheel(32, -1), 30);
+
+    // Several notches at once compound: 32 x 1.05^3 = 37.044 -> 37.
+    QCOMPARE(fontSizeForWheel(32, 3), 37);
+
+    // Zero notches is the value unchanged.
+    QCOMPARE(fontSizeForWheel(32, 0), 32);
+
+    // The minimum bound is the handle's own: 160 up cannot grow, 8 down cannot
+    // shrink, whatever the step.
+    QCOMPARE(fontSizeForWheel(160, 1), 160);
+    QCOMPARE(fontSizeForWheel(160, 3), 160);
+    QCOMPARE(fontSizeForWheel(8, -10), 8);
+
+    // A notch moves at least a whole point where the proportion alone rounds it
+    // away. 8 x 1.05 = 8.4 -> 8 and 8 x 0.95 = 7.6 -> 8 would both look dead, so
+    // the floor gives 9 up and 7 down; the lower bound pulls the 7 back to 8.
+    QCOMPARE(fontSizeForWheel(8, 1), 9);
+    QCOMPARE(fontSizeForWheel(8, -1), 8);
+    // At 9 pt the floor is visible on its own, clear of any clamp: 9 x 0.95 =
+    // 8.55 -> 9 without it, 8 with it.
+    QCOMPARE(fontSizeForWheel(9, -1), 8);
+
+    // The two directions are symmetric where no floor bites: +1 then -1 returns
+    // the start (34 x 0.95 = 32.3 -> 32).
+    QCOMPARE(fontSizeForWheel(fontSizeForWheel(32, 1), -1), 32);
+    QCOMPARE(fontSizeForWheel(fontSizeForWheel(100, 1), -1), 100);
+    QCOMPARE(fontSizeForWheel(100, 1), 105);
+    QCOMPARE(fontSizeForWheel(100, -1), 95);
 }
 
 void OverlayPlacementTest::onePointHoldsForAnyBoxSize()

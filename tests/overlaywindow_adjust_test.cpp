@@ -27,6 +27,7 @@
 
 #include <QCursor>
 #include <QGuiApplication>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -57,6 +58,7 @@ private Q_SLOTS:
     void dragPollLivesExactlyAsLongAsTheDrag();
     void repeatedPlacementPushesTheSameLayerStateOnce();
     void positionDragFollowsThePointerUnderThePlatformsReport();
+    void wheelAdjustsTheFontSizeInNotches();
 };
 
 void OverlayWindowAdjustTest::enteringOverridesClickThroughAndKeyboard()
@@ -483,6 +485,102 @@ void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsRepo
                 QCOMPARE(pushedTopLeft(), pushedWhileStopped);
             }
         }
+    }
+}
+
+void OverlayWindowAdjustTest::wheelAdjustsTheFontSizeInNotches()
+{
+    // 11. A wheel notch on the block resizes the text, and it is applied and
+    //     reported at once: a wheel has no release, so unlike a corner drag there
+    //     is no single "report at the end". The stored setting is 32, so one
+    //     notch is fontSizeForWheel(32, 1) = 34, reported exactly once.
+    {
+        OverlayWindow overlay;
+        overlay.setFontSize(32);
+        QSignalSpy edits(&overlay, &OverlayWindow::fontSizeEdited);
+        overlay.beginAdjusting();
+
+        overlay.nudgeFontSize(OverlayWindow::WheelUnitsPerNotch);
+
+        QCOMPARE(overlay.adjustingFontSize(), fontSizeForWheel(32, 1));
+        QCOMPARE(overlay.adjustingFontSize(), 34);
+        QCOMPARE(edits.count(), 1);
+        QCOMPARE(edits.constFirst().constFirst().toInt(), 34);
+    }
+
+    // A trackpad or a high-resolution wheel sends less than a notch at a time.
+    // The units bank up, so three 40-unit turns (40 + 40 + 40 = 120) are one
+    // notch: the first two do nothing and report nothing, the third steps.
+    {
+        OverlayWindow overlay;
+        overlay.setFontSize(32);
+        QSignalSpy edits(&overlay, &OverlayWindow::fontSizeEdited);
+        overlay.beginAdjusting();
+
+        overlay.nudgeFontSize(40);
+        QCOMPARE(overlay.adjustingFontSize(), 0); // nothing banked into a notch yet
+        QCOMPARE(edits.count(), 0);
+        overlay.nudgeFontSize(40);
+        QCOMPARE(overlay.adjustingFontSize(), 0);
+        QCOMPARE(edits.count(), 0);
+        overlay.nudgeFontSize(40);
+        QCOMPARE(overlay.adjustingFontSize(), fontSizeForWheel(32, 1));
+        QCOMPARE(overlay.adjustingFontSize(), 34);
+        QCOMPARE(edits.count(), 1);
+    }
+
+    // Reversing mid-notch cancels the banked units: +40 then -40 leaves the
+    // accumulator at zero, so nothing moves and nothing is reported.
+    {
+        OverlayWindow overlay;
+        overlay.setFontSize(32);
+        QSignalSpy edits(&overlay, &OverlayWindow::fontSizeEdited);
+        overlay.beginAdjusting();
+
+        overlay.nudgeFontSize(40);
+        overlay.nudgeFontSize(-40);
+
+        QCOMPARE(overlay.adjustingFontSize(), 0);
+        QCOMPARE(edits.count(), 0);
+    }
+
+    // Outside adjusting mode a wheel turn is not an edit: it would write a size
+    // that is on screen nowhere. It must do and report nothing.
+    {
+        OverlayWindow overlay;
+        overlay.setFontSize(32);
+        QSignalSpy edits(&overlay, &OverlayWindow::fontSizeEdited);
+
+        overlay.nudgeFontSize(OverlayWindow::WheelUnitsPerNotch);
+
+        QCOMPARE(overlay.adjustingFontSize(), 0);
+        QCOMPARE(edits.count(), 0);
+    }
+
+    // The upper bound holds, and once the live size reaches it further notches
+    // report nothing. The edit is wired back into the setting, exactly as the
+    // application does, so a later notch compares against the new stored value.
+    {
+        OverlayWindow overlay;
+        overlay.setFontSize(100);
+        QObject::connect(&overlay, &OverlayWindow::fontSizeEdited, &overlay, &OverlayWindow::setFontSize);
+        QSignalSpy edits(&overlay, &OverlayWindow::fontSizeEdited);
+        overlay.beginAdjusting();
+
+        // Roll well past 160 one notch at a time.
+        for (int i = 0; i < 12; ++i) {
+            overlay.nudgeFontSize(OverlayWindow::WheelUnitsPerNotch);
+        }
+        QCOMPARE(overlay.adjustingFontSize(), 160);
+
+        // At the bound the value already equals the stored setting, so a further
+        // notch changes nothing and reports nothing.
+        const int reportsAtBound = edits.count();
+        for (int i = 0; i < 5; ++i) {
+            overlay.nudgeFontSize(OverlayWindow::WheelUnitsPerNotch);
+        }
+        QCOMPARE(overlay.adjustingFontSize(), 160);
+        QCOMPARE(edits.count(), reportsAtBound);
     }
 }
 

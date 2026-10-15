@@ -125,4 +125,15 @@ PlacementAnchors anchorsFor(QPoint boxTopLeft, int padding = 0);
  */
 int fontSizeForDrag(int startPoints, QPointF delta);
 
+/*!
+ * The font size \a points becomes after the wheel turns \a notches, in points.
+ *
+ * Each notch is a proportional 5 % of the current size, the same feel as the
+ * corner handle: a fixed 1 pt would crawl at 32 pt and jump at 120 pt. Several
+ * notches arriving at once compound that step. Each notch also moves at least
+ * one point, so a small size where the proportion alone rounds away (8 pt) still
+ * responds, and the result is clamped to the handle's own [8, 160] points.
+ */
+int fontSizeForWheel(int points, int notches);
+
 } // namespace kshadowlrc

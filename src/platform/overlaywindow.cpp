@@ -260,6 +260,10 @@ void OverlayWindow::beginAdjusting()
     }
     m_adjusting = true;
 
+    // A session starts at a whole notch: any wheel remainder left over from a
+    // previous session must not carry into this one.
+    m_fontWheelUnits = 0;
+
     // Take pointer input so a frame and its handles are grabbable, and ask for
     // the keyboard on demand so Esc can arrive. Both override the configured
     // values for as long as adjusting lasts.
@@ -452,6 +456,40 @@ void OverlayWindow::endDrag()
     // The surface was frozen at the grab-time box for as long as the drag lasted;
     // now that it is over, re-apply the real content size.
     applyContentSize();
+}
+
+void OverlayWindow::nudgeFontSize(int angleDelta)
+{
+    // A wheel turn is an edit only in adjusting mode. Outside it one turn would
+    // write a size that is on screen nowhere into the settings.
+    if (!m_adjusting) {
+        return;
+    }
+
+    // A trackpad or a high-resolution wheel reports less than a whole notch at a
+    // time, so the units are banked until a notch adds up; a reversal subtracts
+    // from the same signed accumulator and cancels what was banked. Integer
+    // division truncates toward zero, so the notch count is right for either
+    // direction and the remainder stays behind.
+    m_fontWheelUnits += angleDelta;
+    const int notches = m_fontWheelUnits / WheelUnitsPerNotch;
+    if (notches == 0) {
+        return;
+    }
+    m_fontWheelUnits -= notches * WheelUnitsPerNotch;
+
+    // The base is the size on screen right now: a corner drag that just ended
+    // leaves its preview in m_adjustingFontSize, and otherwise it is the setting.
+    const int base = m_adjustingFontSize > 0 ? m_adjustingFontSize : m_fontSize;
+    setAdjustingFontSize(fontSizeForWheel(base, notches));
+
+    // A corner drag reports once, on release; a wheel has no release, so each
+    // notch reports. The test is "differs from the stored setting", so winding
+    // back to the stored value reports again -- that is a real edit -- while
+    // turning against a bound does not report the same size over and over.
+    if (m_adjustingFontSize != m_fontSize) {
+        Q_EMIT fontSizeEdited(m_adjustingFontSize);
+    }
 }
 
 void OverlayWindow::setAdjustingFontSize(int points)

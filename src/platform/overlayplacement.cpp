@@ -6,6 +6,7 @@
 #include <QtGlobal>
 
 #include <algorithm>
+#include <cmath>
 
 namespace kshadowlrc
 {
@@ -100,6 +101,20 @@ int fontSizeForDrag(int startPoints, QPointF delta)
     const qreal factor = 1.0 + delta.y() / kFontDragFullScalePx;
     const int scaled = qRound(startPoints * factor);
     return std::clamp(scaled, kMinFontPoints, kMaxFontPoints);
+}
+
+int fontSizeForWheel(int points, int notches)
+{
+    // Proportional, at the corner handle's feel: 5 % per notch, compounded when
+    // several arrive at once. A fixed 1 pt step would crawl at 32 pt and jump at
+    // 120 pt, which is why the step scales with the size.
+    const int scaled = qRound(points * std::pow(1.05, notches));
+
+    // The proportion alone can lose a notch to rounding -- 8 pt x 5 % is 0.4,
+    // which lands back on 8 and makes the wheel look dead. So each notch also
+    // guarantees a full point, in the direction the wheel turned.
+    const int step = notches >= 0 ? std::max(scaled, points + notches) : std::min(scaled, points + notches);
+    return std::clamp(step, kMinFontPoints, kMaxFontPoints);
 }
 
 PlacementAnchors anchorsFor(QPoint boxTopLeft, int padding)
