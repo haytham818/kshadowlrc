@@ -307,16 +307,16 @@ void OverlayWindow::beginDrag(bool handlesFont)
     // Global screen coordinates: the surface follows the cursor, so its own
     // local coordinates would barely move and the drag would stall or jitter.
     m_dragOriginCursor = QCursor::pos();
-    // The anchor at grab time fixes the font-drag direction and is the frame of
-    // reference the position gesture is compared against on release.
+    // The point at grab time is the frame of reference the position gesture is
+    // compared against on release.
     m_dragStartPlacement = m_placement;
 
     if (handlesFont) {
         m_dragStartFontSize = m_adjustingFontSize > 0 ? m_adjustingFontSize : m_fontSize;
     } else {
         // The box size is captured once: while the lyric text keeps updating the
-        // box changes size, and an anchored box grows from its anchored edge, so
-        // the size at grab time is what the placement maths must use.
+        // box changes size, and the surface is frozen at this box for as long as
+        // the drag lasts so nothing resizes under the pointer.
         m_dragBox = adjustmentBox();
     }
 }
@@ -330,16 +330,20 @@ void OverlayWindow::updateDrag()
     const QPointF delta = QCursor::pos() - m_dragOriginCursor;
 
     if (m_dragHandlesFont) {
-        // The anchor as it was at grab time decides the direction, so a live drag
-        // cannot flip its own sign under the pointer.
-        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, delta, m_dragStartPlacement.vertical));
+        // The top edge is pinned, so the box grows downward: dragging down grows
+        // the text. There is no anchor to consult any more, so nothing can flip
+        // the sign under the pointer.
+        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, delta));
         return;
     }
 
     const QSize screen = screenSize();
-    const QPoint topLeft = placementBoxTopLeft(m_dragStartPlacement, m_dragBox, screen) + QPoint(qRound(delta.x()), qRound(delta.y()));
-    // Clamped so the box can never be dragged half off-screen.
-    setPlacement(clampToScreen(placementFor(topLeft, m_dragBox, screen, AdjustMagnetPx), m_dragBox, screen));
+    const QPoint moved = placementBoxTopLeft(m_dragStartPlacement, m_dragBox, screen) + QPoint(qRound(delta.x()), qRound(delta.y()));
+    // Clamped so the box can never be dragged half off-screen, then turned into
+    // the point. No live magnet: snapping while the drag is in flight is what
+    // makes the position jump within AdjustMagnetPx of the middle; the magnet is
+    // applied once, on release.
+    setPlacement(placementFor(clampToScreen(moved, m_dragBox, screen), m_dragBox, screen, 0));
 }
 
 void OverlayWindow::endDrag()
@@ -357,12 +361,30 @@ void OverlayWindow::endDrag()
         if (points != m_dragStartFontSize) {
             Q_EMIT fontSizeEdited(points);
         }
-    } else if (m_placement != m_dragStartPlacement) {
-        Q_EMIT placementEdited(static_cast<int>(m_placement.vertical),
-                               m_placement.verticalMargin,
-                               static_cast<int>(m_placement.horizontal),
-                               m_placement.horizontalMargin);
+        return;
     }
+
+    // Apply the magnet once, on release, so a release near the middle lands
+    // exactly at 50 %. The live point the drag showed is kept otherwise:
+    // re-deriving a point that is already exact would only add rounding. Without
+    // a screen there is nothing to magnetise against.
+    const QSize screen = screenSize();
+    if (!screen.isEmpty()) {
+        const QPoint topLeft = placementBoxTopLeft(m_placement, m_dragBox, screen);
+        if (placementFor(topLeft, m_dragBox, screen, AdjustMagnetPx).horizontalPercent == 50.0) {
+            Placement snapped = m_placement;
+            snapped.horizontalPercent = 50.0;
+            setPlacement(snapped);
+        }
+    }
+
+    if (m_placement != m_dragStartPlacement) {
+        Q_EMIT placementEdited(m_placement.horizontalPercent, m_placement.verticalPercent);
+    }
+
+    // The surface was frozen at the grab-time box for as long as the drag lasted;
+    // now that it is over, re-apply the real content size.
+    applyContentSize();
 }
 
 void OverlayWindow::setAdjustingFontSize(int points)
@@ -380,11 +402,22 @@ void OverlayWindow::applyAnchors()
         return;
     }
 
-    // While adjusting the surface is padded, so its margins are the text box's
-    // minus the padding; the stored placement is left describing the text box.
-    const PlacementAnchors state = anchorsFor(m_placement, m_adjusting ? AdjustPadding : 0);
+    // The margins are derived from the point and the box the surface is sized to
+    // right now, so the text box's centre and top edge stay on the point even as
+    // the box grows or shrinks with the lyrics. While a position drag is in
+    // flight that box is the frozen grab-time one, matching applyContentSize().
+    const QSize box = m_dragging && !m_dragHandlesFont ? m_dragBox : adjustmentBox();
+    const QPoint topLeft = placementBoxTopLeft(m_placement, box, screenSize());
+    const PlacementAnchors state = anchorsFor(topLeft, m_adjusting ? AdjustPadding : 0);
+
+    if (m_anchorsPushed && state.anchors == m_pushedAnchors && state.margins == m_pushedMargins) {
+        return;
+    }
     m_layerWindow->setAnchors(state.anchors);
     m_layerWindow->setMargins(state.margins);
+    m_pushedAnchors = state.anchors;
+    m_pushedMargins = state.margins;
+    m_anchorsPushed = true;
 }
 
 void OverlayWindow::applyInputRegion(bool force)
@@ -440,18 +473,30 @@ void OverlayWindow::setContentSize(qreal width, qreal height)
 
 void OverlayWindow::applyContentSize()
 {
-    QSize size = adjustmentBox();
+    // While a position drag is in flight the surface is frozen at the box it was
+    // grabbed with: the music can advance and the lyrics change size, but the
+    // box under the pointer must not resize or the grab would jump. endDrag()
+    // re-applies the real content size once the drag is over.
+    QSize size = m_dragging && !m_dragHandlesFont ? m_dragBox : adjustmentBox();
     if (m_adjusting) {
         size += QSize(2 * AdjustPadding, 2 * AdjustPadding);
     }
 
-    if (m_layerWindow) {
-        // The anchored (stretched) axis ignores this; only the free axis follows
-        // the lyric content.
-        m_layerWindow->setDesiredSize(size);
-    } else {
-        resize(size);
+    if (!m_sizePushed || size != m_pushedSize) {
+        if (m_layerWindow) {
+            m_layerWindow->setDesiredSize(size);
+        } else {
+            resize(size);
+        }
+        m_sizePushed = true;
+        m_pushedSize = size;
     }
+
+    // The box width follows the lyrics, so the left margin has to be re-derived
+    // from the point on every content-size change: without this the horizontal
+    // centre would slide whenever a line of a different length is shown. This is
+    // the core of the "the text does not drift" fix.
+    applyAnchors();
 }
 
 } // namespace kshadowlrc

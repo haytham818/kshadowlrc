@@ -14,13 +14,16 @@ import org.kde.kirigami as Kirigami
  * Root item of the floating lyrics overlay.
  *
  * The layer-shell surface is placed by the anchors and margins a Placement maps
- * to (see OverlayWindow::applyAnchors): one screen edge vertically and one side
- * of the screen horizontally, with the box sizing itself to the lyrics on both
- * axes. This item fills that surface; the lyric column is centred inside it and
- * reports its laid-out extent back through OverlayWindow::setContentSize(). With
- * no line to show it reports an empty content size, so the overlay does not claim
- * screen space while nothing is playing. There is no background plate - only the
- * outlined text is drawn.
+ * to (see OverlayWindow::applyAnchors): a point - the text box's horizontal
+ * centre and its top edge, as percentages of the screen - with the box sizing
+ * itself to the lyrics on both axes and those margins re-derived from the point
+ * every time the box changes size. The point is what holds still: as the lyrics
+ * grow or shrink, the centre and the top edge stay where they are, so the line
+ * being read never moves. This item fills that surface; the lyric column is
+ * centred inside it and reports its laid-out extent back through
+ * OverlayWindow::setContentSize(). With no line to show it reports an empty
+ * content size, so the overlay does not claim screen space while nothing is
+ * playing. There is no background plate - only the outlined text is drawn.
  *
  * All styling comes live from the `settings` context property; the number of
  * upcoming lines is already clamped by the controller's visibleLines handling.

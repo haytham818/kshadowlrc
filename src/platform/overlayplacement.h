@@ -14,32 +14,25 @@ namespace kshadowlrc
 {
 
 /*!
- * Where the overlay text box is anchored, and how far it sits from the screen
- * edges, as four plain values. This is the whole geometry of the overlay in one
- * offline-testable place: nothing here touches a QWindow, a compositor or a
- * QObject, so every rule below can be checked without a running desktop.
+ * Where the overlay text box sits, as a point: its horizontal centre and its
+ * top edge, each a percentage of the screen. This is the whole geometry of the
+ * overlay in one offline-testable place: nothing here touches a QWindow, a
+ * compositor or a QObject, so every rule below can be checked without a running
+ * desktop.
+ *
+ * The point exists because the box is only ever as large as the lyrics, so it
+ * changes size whenever the lyrics change. The layer-shell margins are derived
+ * from the point *and the current box* on every such change (see
+ * OverlayWindow::applyAnchors), which keeps the centre and the top edge - the
+ * line being read - exactly where the point says. Anchoring to a screen edge
+ * instead would pin only that edge and let the text grow away from it.
  *
  * The box a Placement describes is the text box, never the (possibly padded)
  * surface: see OverlayWindow for why the padding must not leak in.
  */
-
-/*! Vertical anchor. There is no vertical centre: it is Top or Bottom only. */
-enum class VerticalAnchor {
-    Top,
-    Bottom,
-};
-
-enum class HorizontalAnchor {
-    Left,
-    Center,
-    Right,
-};
-
 struct Placement {
-    VerticalAnchor vertical;
-    int verticalMargin;
-    HorizontalAnchor horizontal;
-    int horizontalMargin;
+    double horizontalPercent = 50.0; //!< Box centre, as a percentage of the screen width.
+    double verticalPercent = 80.0; //!< Box top edge, as a percentage of the screen height.
 };
 
 bool operator==(const Placement &lhs, const Placement &rhs);
@@ -55,51 +48,53 @@ struct PlacementAnchors {
  * The box's top-left in screen coordinates, for \a placement.
  *
  * The screen origin is its top-left; \a box is the text box, \a screen the
- * screen it lives on. Horizontal Center ignores its margin (the compositor
- * centres the box), the other anchors measure their margin from their edge.
+ * screen it lives on. The x puts the box's centre on the screen's
+ * \a placement.horizontalPercent; the y puts the box's top edge on the screen's
+ * \a placement.verticalPercent. An empty screen (0 width or height, e.g. before
+ * a screen is known) yields (0, 0).
  */
 QPoint placementBoxTopLeft(const Placement &placement, QSize box, QSize screen);
 
 /*!
- * The Placement a box at \a boxTopLeft describes.
+ * The Placement a box at \a boxTopLeft describes: the inverse of
+ * placementBoxTopLeft().
  *
- * Left/Right by which half of the screen the box's centre falls in, Top/Bottom
- * likewise. Within \a magnetPx of the horizontal centre the box snaps to Center
- * (whose margin is 0), so a dragged box lands back on the default look easily.
- * There is no vertical magnet and no vertical centre.
+ * With \a magnetPx above zero, a box whose centre falls within that many pixels
+ * of the screen's middle snaps to exactly 50 %, so a dragged box lands back on
+ * the default look easily. The comparison is doubled, so a half pixel of
+ * rounding cannot decide it. There is no vertical magnet. A zero screen
+ * dimension cannot be inverted and yields the defaults.
  */
 Placement placementFor(QPoint boxTopLeft, QSize box, QSize screen, int magnetPx);
 
 /*!
- * \a placement with any margin below zero or pushing the box past an edge
- * clamped, so the box stays fully inside \a screen.
+ * \a boxTopLeft clamped so the box stays fully inside \a screen when it fits:
+ * both axes floor at zero and stop at the screen edge less the box. A box larger
+ * than the screen is pinned to the origin rather than pushed off.
  */
-Placement clampToScreen(const Placement &placement, QSize box, QSize screen);
+QPoint clampToScreen(QPoint boxTopLeft, QSize box, QSize screen);
+
+/*!
+ * The layer-shell anchors and margins that put the box's top-left at
+ * \a boxTopLeft.
+ *
+ * Always AnchorTop | AnchorLeft: the surface is anchored by its top-left corner
+ * and never stretched on either axis, so it stays exactly as large as its
+ * desired size and grows downward and to the right from that point. \a padding
+ * is the surface's padding on each side (0 outside adjusting mode): the surface
+ * extends beyond the text box by it, so its margins are the box's top-left
+ * minus the padding, never below zero. Nothing else is set.
+ */
+PlacementAnchors anchorsFor(QPoint boxTopLeft, int padding = 0);
 
 /*!
  * The font size \a startPoints becomes after dragging \a delta.
  *
- * The rule is "away from the anchored edge grows": with \a vertical Bottom a
- * drag up (negative y) grows the text and a drag down shrinks it; with Top it is
- * the other way round, so dragging down (which visibly makes a top-anchored box
- * taller) grows it. The direction is passed in rather than assumed, so the
- * gesture matches the edge the box hangs from.
- *
- * Only the vertical component matters and it scales proportionally: a drag of
- * half the scale changes the size by half. The result is clamped to [8, 160]
- * points.
+ * The box's top edge is pinned, so the box grows downward: dragging down
+ * (positive y) grows the text, dragging up shrinks it. Only the vertical
+ * component matters and it scales proportionally: a drag of half the scale
+ * changes the size by half. The result is clamped to [8, 160] points.
  */
-int fontSizeForDrag(int startPoints, QPointF delta, VerticalAnchor vertical);
-
-/*!
- * The layer-shell anchors and margins for \a placement.
- *
- * \a padding is the surface's padding on each side (0 outside adjusting mode):
- * the surface extends beyond the text box by it, so the surface's margin from
- * the anchored edge is the text box's margin minus the padding, never below
- * zero. Horizontal Center produces no left/right anchor and no horizontal
- * margin, which is how the compositor centres the surface.
- */
-PlacementAnchors anchorsFor(const Placement &placement, int padding = 0);
+int fontSizeForDrag(int startPoints, QPointF delta);
 
 } // namespace kshadowlrc

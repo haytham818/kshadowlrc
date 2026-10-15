@@ -24,11 +24,13 @@ namespace kshadowlrc
  * The floating lyrics overlay: a wlr-layer-shell surface that stays above every
  * window with no user-configured window rules.
  *
- * Anchored to a screen edge plus a horizontal anchor (Left/Right edge, or the
- * centred default), it is positioned by the anchors and margins a Placement
- * maps to; the free axes follow the lyric content, which QML reports through
- * setContentSize(). It takes no keyboard focus and, by default, no pointer input
- * (clicks pass through to whatever is underneath).
+ * Anchored to the screen's top-left corner and positioned by the point a
+ * Placement describes - the text box's horizontal centre and its top edge - so
+ * the margins are re-derived from that point and the current box on every
+ * content-size change. The box takes its size from the lyric content, which QML
+ * reports through setContentSize(); a longer or shorter line therefore never
+ * moves the text the user is reading. It takes no keyboard focus and, by
+ * default, no pointer input (clicks pass through to whatever is underneath).
  *
  * In adjusting mode the surface instead takes pointer input, asks for keyboard
  * interactivity OnDemand so Esc can arrive, and lets the user drag its position
@@ -49,15 +51,16 @@ public:
     /*! The placement box is never smaller than this while adjusting, so an empty
      *  overlay still has something to grab. */
     static constexpr QSize MinAdjustBox = QSize(240, 80);
-    /*! How close to the horizontal centre a dragged box snaps to Center, in px. */
+    /*! A released position drag within this many px of the middle snaps to 50 %. */
     static constexpr int AdjustMagnetPx = 24;
 
     explicit OverlayWindow(QWindow *parent = nullptr);
 
     /*!
-     * The placement: the four anchored values the surface is positioned by.
-     * Setting it applies the anchors at once; during a drag it is updated live
-     * and only the release is reported through placementEdited().
+     * The placement point the surface is positioned by: the text box's
+     * horizontal centre and its top edge, as percentages of the screen. Setting
+     * it applies the anchors at once; during a drag it is updated live and only
+     * the release is reported through placementEdited().
      */
     void setPlacement(const Placement &placement);
     Placement placement() const
@@ -121,9 +124,22 @@ public:
     }
 
     /*!
-     * The box the placement maths run on: the text box, raised to MinAdjustBox
-     * while adjusting so an empty overlay is still grabbable. Never the padded
-     * surface, so the padding cannot leak into a stored margin.
+     * The surface size last pushed to the layer surface (or to the QWindow when
+     * there is none). Exposed only so its behaviour can be asserted without a
+     * compositor: offscreen there is no layer surface to query, so the size the
+     * window decided on is read back here instead.
+     */
+    QSize pushedSurfaceSize() const
+    {
+        return m_pushedSize;
+    }
+
+    /*!
+     * The box the placement maths run on when no drag is in flight: the text
+     * box, raised to MinAdjustBox while adjusting so an empty overlay is still
+     * grabbable. Never the padded surface, so the padding cannot leak into a
+     * stored margin. (While a position drag is in flight the frozen grab-time
+     * box stands in; see applyContentSize().)
      */
     QSize adjustmentBox() const;
 
@@ -183,8 +199,8 @@ public:
 Q_SIGNALS:
     void adjustingChanged();
     void adjustingFontSizeChanged();
-    /*! The user released a position drag: the box's new placement. */
-    void placementEdited(int verticalAnchor, int verticalMargin, int horizontalAnchor, int horizontalMargin);
+    /*! The user released a position drag: the box's new placement point. */
+    void placementEdited(double horizontalPercent, double verticalPercent);
     /*! The user released a font drag: the new font size in points. */
     void fontSizeEdited(int points);
 
@@ -220,12 +236,21 @@ private:
     QSize screenSize() const;
 
     LayerShellQt::Window *m_layerWindow = nullptr;
-    Placement m_placement{VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0};
+    Placement m_placement;
     int m_fontSize = 32;
     bool m_clickThrough = true;
     QRegion m_inputRegion;
     LayerShellQt::Window::KeyboardInteractivity m_keyboardInteractivity = LayerShellQt::Window::KeyboardInteractivityNone;
     QSize m_contentSize = QSize(1, 1);
+
+    // The layer state last pushed, so a redundant apply is skipped. rebuildSurface()
+    // deliberately re-reads all of it from the surviving LayerShellQt::Window, so
+    // the caches stay valid across a rebuild and nothing needs invalidating there.
+    bool m_sizePushed = false;
+    QSize m_pushedSize;
+    bool m_anchorsPushed = false;
+    LayerShellQt::Window::Anchors m_pushedAnchors;
+    QMargins m_pushedMargins;
 
     // Adjusting mode. None of this reaches the settings file.
     bool m_adjusting = false;
@@ -233,7 +258,7 @@ private:
     bool m_dragging = false;
     bool m_dragHandlesFont = false;
     QPoint m_dragOriginCursor;
-    Placement m_dragStartPlacement{VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0};
+    Placement m_dragStartPlacement;
     QSize m_dragBox = QSize(1, 1);
     int m_dragStartFontSize = 0;
 

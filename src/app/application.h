@@ -55,7 +55,7 @@ public:
 private:
     /*! Apply the overlay-owned settings and follow them at runtime. */
     void applyOverlaySettings(const QString &commandLineOutput);
-    /*! The placement the four General settings currently describe. */
+    /*! The placement point the two General settings currently describe. */
     Placement placementFromSettings() const;
     /*! Apply the playback-owned settings and follow them at runtime. */
     void applyPlaybackSettings();

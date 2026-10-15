@@ -27,10 +27,9 @@ in the background.
 - Shows the current line, its translation when the source has one, and the
   lines after it, dimmed.
 - Follows the configuration while it runs: font, size, colour and outline,
-  how many upcoming lines to show, where it sits — which edge, which side of
-  the screen, how far from it, or dragged somewhere by hand — click-through,
-  which output to land on, the lyric offset, and which lyric sources to ask,
-  in which order.
+  how many upcoming lines to show, where it sits — two percentages, or the
+  same place dragged by hand — click-through, which output to land on, the
+  lyric offset, and which lyric sources to ask, in which order.
 - Says what the lyrics are doing whenever there are none: the tray tooltip and
   the settings window tell "still looking" apart from "none for this song" and
   from "the lookup failed".
@@ -143,9 +142,12 @@ clearing the cache.
 **Adjust position and size** in the tray menu lets you drag the overlay instead
 of typing numbers: a frame and four corner handles appear, dragging the text
 moves it, dragging a handle scales it, and `Esc` — or that same tray item —
-finishes. Placement is anchored, so the text grows away from the edge it is
-pinned to; releasing near the middle of the screen snaps it back to being
-horizontally centred, which is the position that survives a font size change.
+finishes. A drag sets where the lyrics hang: their horizontal centre and their
+top edge, each as a percentage of the screen, which are the two numbers the
+settings window shows. That point is what holds still. The line you are reading
+keeps its place while the lines under it come and go, and a longer line grows to
+both sides, so the overlay does not wander as the track plays. Releasing near
+the middle of the screen snaps the horizontal centre back to 50%.
 
 While the mode is on, the overlay takes the pointer and, only so that `Esc` can
 reach it, the keyboard. That is the price of being click-through the rest of the

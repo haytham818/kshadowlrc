@@ -3,18 +3,19 @@
 //
 // Offline checks for OverlayWindow's adjusting mode.
 //
-// The window is constructed with no compositor (the offscreen platform), so
-// LayerShellQt::Window::get() returns null and m_layerWindow is null: the
-// assertions are all against the window's own members and getters -- the input
-// region, the requested keyboard interactivity and the placement -- never
-// against anything a compositor would do. XDG_CONFIG_HOME points at a private
-// temporary directory so the settings writes under test cannot reach the
+// The window is constructed with no compositor (the offscreen platform): there
+// is no layer surface to position, so the assertions are all against the
+// window's own members and getters -- the input region, the requested keyboard
+// interactivity, the placement point and the surface size it last pushed --
+// never against anything a compositor would do. XDG_CONFIG_HOME points at a
+// private temporary directory so the settings writes under test cannot reach the
 // developer's real kshadowlrcrc.
 //
 // The offscreen cursor cannot move, so a drag through the public API is always
 // motionless here: that is what the "a motionless click emits nothing" checks
-// rely on, and the live anchors a real drag would apply are applied directly
-// through setPlacement() where a committed edit is under test.
+// rely on. There is also no screen, so the release has nothing to magnetise
+// against and keeps the live point; the live point a real drag would apply is
+// set directly through setPlacement() where a committed edit is under test.
 
 #include "config/settings.h"
 #include "platform/overlaywindow.h"
@@ -46,6 +47,7 @@ private Q_SLOTS:
     void cancelledAdjustingWritesNoSettings();
     void motionlessClickEmitsNothing();
     void releasedDragWritesThePlacementOnce();
+    void frozenSurfaceDuringPositionDrag();
 };
 
 void OverlayWindowAdjustTest::enteringOverridesClickThroughAndKeyboard()
@@ -95,15 +97,15 @@ void OverlayWindowAdjustTest::leavingRestoresTheConfiguredState()
 void OverlayWindowAdjustTest::adjustingKeepsTheTextBoxAndItsPlacement()
 {
     // 3. The placement continuously describes the text box: adjusting pads the
-    //    surface but never touches the stored margins, and an empty overlay gets
+    //    surface but never touches the stored point, and an empty overlay gets
     //    the minimum box to grab.
     OverlayWindow overlay;
-    overlay.setPlacement({VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0});
+    overlay.setPlacement(Placement{50.0, 80.0});
     overlay.setContentSize(400, 100);
     QCOMPARE(overlay.adjustmentBox(), QSize(400, 100));
 
     overlay.beginAdjusting();
-    QCOMPARE(overlay.placement(), (Placement{VerticalAnchor::Bottom, 64, HorizontalAnchor::Center, 0}));
+    QCOMPARE(overlay.placement(), (Placement{50.0, 80.0}));
     QCOMPARE(overlay.adjustmentBox(), QSize(400, 100));
 
     // Nothing playing: the content collapses, so the adjusting box holds its
@@ -124,28 +126,21 @@ void OverlayWindowAdjustTest::cancelledAdjustingWritesNoSettings()
     const int originalFontSize = settings->fontSize();
 
     OverlayWindow overlay;
-    QObject::connect(&overlay,
-                     &OverlayWindow::placementEdited,
-                     settings.get(),
-                     [&settings](int verticalAnchor, int verticalMargin, int horizontalAnchor, int horizontalMargin) {
-                         settings->setVerticalAnchor(verticalAnchor);
-                         settings->setVerticalMargin(verticalMargin);
-                         settings->setHorizontalAnchor(horizontalAnchor);
-                         settings->setHorizontalMargin(horizontalMargin);
-                     });
+    QObject::connect(&overlay, &OverlayWindow::placementEdited, settings.get(), [&settings](double horizontalPercent, double verticalPercent) {
+        settings->setHorizontalPosition(horizontalPercent);
+        settings->setVerticalPosition(verticalPercent);
+    });
     QObject::connect(&overlay, &OverlayWindow::fontSizeEdited, settings.get(), [&settings](int points) {
         settings->setFontSize(points);
     });
 
     overlay.beginAdjusting();
     overlay.beginDrag(false);
-    overlay.setPlacement({VerticalAnchor::Top, 200, HorizontalAnchor::Right, 40});
+    overlay.setPlacement(Placement{12.5, 62.5});
     overlay.endAdjusting(false);
 
-    QCOMPARE(settings->verticalAnchor(), Settings::EnumVerticalAnchor::Bottom);
-    QCOMPARE(settings->verticalMargin(), 64);
-    QCOMPARE(settings->horizontalAnchor(), Settings::EnumHorizontalAnchor::Center);
-    QCOMPARE(settings->horizontalMargin(), 0);
+    QVERIFY(qFuzzyCompare(settings->horizontalPosition(), 50.0));
+    QVERIFY(qFuzzyCompare(settings->verticalPosition(), 80.0));
     QCOMPARE(settings->fontSize(), originalFontSize);
 }
 
@@ -191,34 +186,55 @@ void OverlayWindowAdjustTest::motionlessClickEmitsNothing()
 void OverlayWindowAdjustTest::releasedDragWritesThePlacementOnce()
 {
     // 6. The release is the one moment a changed placement is reported, and the
-    //    values are the text box's margins -- the adjusting padding does not leak
-    //    in. The offscreen cursor cannot move, so the live anchors a real drag
-    //    would have applied are applied directly, exactly as updateDrag() does.
+    //    values are the text box's point -- the adjusting padding does not leak
+    //    in. The offscreen cursor cannot move and there is no screen, so the live
+    //    point a real drag would have applied is applied directly, exactly as
+    //    updateDrag() does.
     std::unique_ptr<Settings> settings(kshadowlrc::createSettings());
 
     OverlayWindow overlay;
     int edits = 0;
-    QObject::connect(&overlay,
-                     &OverlayWindow::placementEdited,
-                     settings.get(),
-                     [&settings, &edits](int verticalAnchor, int verticalMargin, int horizontalAnchor, int horizontalMargin) {
-                         ++edits;
-                         settings->setVerticalAnchor(verticalAnchor);
-                         settings->setVerticalMargin(verticalMargin);
-                         settings->setHorizontalAnchor(horizontalAnchor);
-                         settings->setHorizontalMargin(horizontalMargin);
-                     });
+    QObject::connect(&overlay, &OverlayWindow::placementEdited, settings.get(), [&settings, &edits](double horizontalPercent, double verticalPercent) {
+        ++edits;
+        settings->setHorizontalPosition(horizontalPercent);
+        settings->setVerticalPosition(verticalPercent);
+    });
 
     overlay.beginAdjusting();
     overlay.beginDrag(false);
-    overlay.setPlacement({VerticalAnchor::Top, 200, HorizontalAnchor::Right, 40});
+    overlay.setPlacement(Placement{12.5, 62.5});
     overlay.endDrag();
 
     QCOMPARE(edits, 1);
-    QCOMPARE(settings->verticalAnchor(), Settings::EnumVerticalAnchor::Top);
-    QCOMPARE(settings->verticalMargin(), 200);
-    QCOMPARE(settings->horizontalAnchor(), Settings::EnumHorizontalAnchor::Right);
-    QCOMPARE(settings->horizontalMargin(), 40);
+    QVERIFY(qFuzzyCompare(settings->horizontalPosition(), 12.5));
+    QVERIFY(qFuzzyCompare(settings->verticalPosition(), 62.5));
+}
+
+void OverlayWindowAdjustTest::frozenSurfaceDuringPositionDrag()
+{
+    // 7. While a position drag is in flight the surface is frozen at the box it
+    //    was grabbed with: the music can advance and the lyrics change size, and
+    //    the surface must not resize under the pointer. After the release the
+    //    real content size is applied.
+    OverlayWindow overlay;
+    overlay.setContentSize(400, 100);
+    overlay.beginAdjusting();
+
+    // The adjusting surface is the 400x100 text box plus 24 px on each side.
+    QCOMPARE(overlay.pushedSurfaceSize(), QSize(448, 148));
+
+    overlay.beginDrag(false);
+    const QSize grabbed = overlay.pushedSurfaceSize();
+    QCOMPARE(grabbed, QSize(448, 148));
+
+    // The lyrics change size mid-drag: the surface stays as it was grabbed.
+    overlay.setContentSize(900, 60);
+    QCOMPARE(overlay.pushedSurfaceSize(), grabbed);
+
+    // The release restores the real content size: the 900x60 box, raised to the
+    // 80 px minimum height, plus the padding.
+    overlay.endDrag();
+    QCOMPARE(overlay.pushedSurfaceSize(), QSize(948, 128));
 }
 
 int main(int argc, char **argv)

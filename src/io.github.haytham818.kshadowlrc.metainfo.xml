@@ -14,7 +14,7 @@
       overlay that sits on top of the other windows. It is a wlr-layer-shell
       surface, so on Plasma 6 Wayland it stays above the desktop, out of the
       taskbar and click-through without any window rule, and it follows the
-      output and the edge it is configured for.
+      output and the position it is configured for.
     </p>
     <p>
       The playing track is read from the desktop's media players over MPRIS:
@@ -27,8 +27,8 @@
     </p>
     <p>
       Font family and size, text colour, outline, the number of visible lines
-      and the line layout, the screen edge, the margin and click-through can be
-      configured; a lyric offset compensates for a player that reports its
+      and the line layout, where the overlay sits on the screen and click-through
+      can be configured; a lyric offset compensates for a player that reports its
       position imprecisely.
     </p>
   </description>

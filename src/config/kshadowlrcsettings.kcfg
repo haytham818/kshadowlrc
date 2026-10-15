@@ -50,45 +50,24 @@
       <max>10</max>
     </entry>
 
-    <entry name="verticalAnchor" type="Enum">
-      <label>Screen edge the overlay is anchored to vertically</label>
-      <choices>
-        <choice name="Top">
-          <label>Top edge</label>
-        </choice>
-        <choice name="Bottom">
-          <label>Bottom edge</label>
-        </choice>
-      </choices>
-      <default>Bottom</default>
-    </entry>
-
-    <entry name="verticalMargin" type="Int">
-      <label>Gap between the overlay and its vertical edge in logical pixels</label>
-      <default>64</default>
+    <!-- Where the overlay sits: a point, not a place between two edges. The
+         text box's horizontal centre and its top edge are percentages of the
+         screen, and the layer-shell margins are derived from that point every
+         time the lyrics change size. That derivation is what keeps the text
+         still: the middle and the top of the box never move, whatever the
+         lines below them do. -->
+    <entry name="horizontalPosition" type="Double">
+      <label>Horizontal centre of the overlay text, in percent of the screen width</label>
+      <default>50.0</default>
       <min>0</min>
+      <max>100</max>
     </entry>
 
-    <entry name="horizontalAnchor" type="Enum">
-      <label>Where the overlay is anchored horizontally</label>
-      <choices>
-        <choice name="Left">
-          <label>Left edge</label>
-        </choice>
-        <choice name="Center">
-          <label>Horizontally centred</label>
-        </choice>
-        <choice name="Right">
-          <label>Right edge</label>
-        </choice>
-      </choices>
-      <default>Center</default>
-    </entry>
-
-    <entry name="horizontalMargin" type="Int">
-      <label>Gap between the overlay and its horizontal edge in logical pixels</label>
-      <default>0</default>
+    <entry name="verticalPosition" type="Double">
+      <label>Top edge of the overlay text, in percent of the screen height</label>
+      <default>80.0</default>
       <min>0</min>
+      <max>100</max>
     </entry>
 
     <entry name="clickThrough" type="Bool">

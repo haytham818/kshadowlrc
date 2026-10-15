@@ -27,10 +27,8 @@ void persistChangesOn(KShadowLrcSettings *settings)
     QObject::connect(settings, &KShadowLrcSettings::outlineEnabledChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::displayModeChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::visibleLinesChanged, settings, &KConfigSkeleton::save);
-    QObject::connect(settings, &KShadowLrcSettings::verticalAnchorChanged, settings, &KConfigSkeleton::save);
-    QObject::connect(settings, &KShadowLrcSettings::verticalMarginChanged, settings, &KConfigSkeleton::save);
-    QObject::connect(settings, &KShadowLrcSettings::horizontalAnchorChanged, settings, &KConfigSkeleton::save);
-    QObject::connect(settings, &KShadowLrcSettings::horizontalMarginChanged, settings, &KConfigSkeleton::save);
+    QObject::connect(settings, &KShadowLrcSettings::horizontalPositionChanged, settings, &KConfigSkeleton::save);
+    QObject::connect(settings, &KShadowLrcSettings::verticalPositionChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::clickThroughChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::outputNameChanged, settings, &KConfigSkeleton::save);
     QObject::connect(settings, &KShadowLrcSettings::lyricOffsetMsChanged, settings, &KConfigSkeleton::save);

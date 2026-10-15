@@ -21,9 +21,11 @@
 #include "config/settings.h"
 
 #include <QGuiApplication>
+#include <QJSValue>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQmlProperty>
 #include <QQuickStyle>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -54,12 +56,6 @@ namespace
 // The label carries no objectName, so it is looked up by text; keep the two in
 // step if the wording ever changes.
 const char kOutputFallbackHint[] = "That output is not connected; the overlay is shown on the primary output.";
-
-// What each margin row says about the anchor it belongs to: a margin is the gap
-// to its own anchor's edge, so on its own it names nothing. Looked up by text
-// for the same reason as the hint above.
-const char kVerticalMarginHint[] = "The gap to the screen edge named by the vertical anchor; on its own it does nothing.";
-const char kHorizontalMarginHint[] = "The gap to the screen edge named by the horizontal anchor; on its own it does nothing.";
 
 /*!
  * Stand-in for kshadowlrc::Outputs, the object the host injects as the `outputs`
@@ -173,17 +169,10 @@ void SettingsQmlTest::initTestCase()
 
 void SettingsQmlTest::enumValues()
 {
-    // settings.qml binds the combo boxes by index to these ints, because
-    // kconfig_compiler emits old-style nested enums without Q_ENUM. If a
-    // <choices> block in the kcfg is ever reordered, these checks fail and point
+    // settings.qml binds the display-mode combo by index to this int, because
+    // kconfig_compiler emits old-style nested enums without Q_ENUM. If the
+    // <choices> block in the kcfg is ever reordered, this check fails and points
     // at the file that has to be updated with it.
-    QCOMPARE(static_cast<int>(Settings::EnumVerticalAnchor::Top), 0);
-    QCOMPARE(static_cast<int>(Settings::EnumVerticalAnchor::Bottom), 1);
-    QCOMPARE(static_cast<int>(Settings::EnumVerticalAnchor::COUNT), 2);
-    QCOMPARE(static_cast<int>(Settings::EnumHorizontalAnchor::Left), 0);
-    QCOMPARE(static_cast<int>(Settings::EnumHorizontalAnchor::Center), 1);
-    QCOMPARE(static_cast<int>(Settings::EnumHorizontalAnchor::Right), 2);
-    QCOMPARE(static_cast<int>(Settings::EnumHorizontalAnchor::COUNT), 3);
     QCOMPARE(static_cast<int>(Settings::EnumDisplayMode::Original), 0);
     QCOMPARE(static_cast<int>(Settings::EnumDisplayMode::Translation), 1);
     QCOMPARE(static_cast<int>(Settings::EnumDisplayMode::Both), 2);
@@ -218,13 +207,15 @@ void SettingsQmlTest::windowState()
     int textFields = 0;
     const auto children = m_window->findChildren<QObject *>();
     for (QObject *object : children) {
+        // Both placement keys are QQC2.SpinBox too: the integer control driven in
+        // tenths of a percent, not the 6.11-only DoubleSpinBox.
         spinBoxes += object->inherits("QQuickSpinBox") ? 1 : 0;
         comboBoxes += object->inherits("QQuickComboBox") ? 1 : 0;
         switches += object->inherits("QQuickSwitch") ? 1 : 0;
         textFields += object->inherits("QQuickTextField") ? 1 : 0;
     }
-    QVERIFY2(spinBoxes == 6, "the form has a spin box for each of the 6 integer keys");
-    QVERIFY2(comboBoxes == 4, "the form has a combo box for each of the 3 enum keys and one for the output");
+    QVERIFY2(spinBoxes == 6, "the form has a spin box for each of the 6 numeric keys");
+    QVERIFY2(comboBoxes == 2, "the form has a combo box for the enum key and one for the output");
     QVERIFY2(switches == 4, "the form has a switch for each of the 4 boolean keys");
     QVERIFY2(textFields >= 3, "the form still has a text field for each of the free-text keys");
 }
@@ -233,73 +224,77 @@ void SettingsQmlTest::placementRows()
 {
     QVERIFY(m_window != nullptr);
 
-    // One edge and one margin became one anchor and one margin per axis. The
-    // anchors name a screen edge - or the centre, horizontally - and each margin
-    // is the gap to its own anchor's edge, so a margin on its own names nothing
-    // and each row says so next to itself.
-    QObject *verticalAnchor = m_window->findChild<QObject *>(QStringLiteral("verticalAnchorField"));
-    QObject *horizontalAnchor = m_window->findChild<QObject *>(QStringLiteral("horizontalAnchorField"));
-    QObject *verticalMargin = m_window->findChild<QObject *>(QStringLiteral("verticalMarginField"));
-    QObject *horizontalMargin = m_window->findChild<QObject *>(QStringLiteral("horizontalMarginField"));
-    QVERIFY2(verticalAnchor != nullptr, "the vertical anchor row is in the window");
-    QVERIFY2(horizontalAnchor != nullptr, "the horizontal anchor row is in the window");
-    QVERIFY2(verticalMargin != nullptr, "the vertical margin row is in the window");
-    QVERIFY2(horizontalMargin != nullptr, "the horizontal margin row is in the window");
+    // The placement is a point: the text box's horizontal centre and its top
+    // edge, each a percentage of the screen. One row each; the margins are
+    // derived from that point in C++, never edited here. QQC2.SpinBox is
+    // integer-only in this Qt, so each control counts tenths of a percent and
+    // 375 is 37.5 %.
+    QObject *horizontalPosition = m_window->findChild<QObject *>(QStringLiteral("horizontalPositionField"));
+    QObject *verticalPosition = m_window->findChild<QObject *>(QStringLiteral("verticalPositionField"));
+    QVERIFY2(horizontalPosition != nullptr, "the horizontal-position row is in the window");
+    QVERIFY2(verticalPosition != nullptr, "the vertical-position row is in the window");
 
-    // The model order must match the <choices> order in the kcfg exactly, which
-    // is the int the combo binds by.
-    const auto modelEntries = [](QObject *combo) {
-        QStringList entries;
-        const QVariantList model = combo->property("model").toList();
-        for (const QVariant &entry : model) {
-            entries.append(entry.toString());
-        }
-        return entries;
+    // The rows open on what the file says, both as the tenths the control holds
+    // and as the percentage it shows.
+    QCOMPARE(horizontalPosition->property("value").toInt(), qRound(m_settings->horizontalPosition() * 10));
+    QCOMPARE(verticalPosition->property("value").toInt(), qRound(m_settings->verticalPosition() * 10));
+    QCOMPARE(horizontalPosition->property("displayText").toString(), QStringLiteral("50.0 %"));
+    QCOMPARE(verticalPosition->property("displayText").toString(), QStringLiteral("80.0 %"));
+
+    // Editing a row writes the setting, exactly as the control does it: set the
+    // tenths value, then emit valueModified (which the arrow keys, the wheel and
+    // the step buttons all do).
+    horizontalPosition->setProperty("value", 375);
+    QVERIFY2(QMetaObject::invokeMethod(horizontalPosition, "valueModified"), "the horizontal-position spin box's valueModified signal is reachable");
+    QCOMPARE(m_settings->horizontalPosition(), 37.5);
+
+    verticalPosition->setProperty("value", 625);
+    QVERIFY2(QMetaObject::invokeMethod(verticalPosition, "valueModified"), "the vertical-position spin box's valueModified signal is reachable");
+    QCOMPARE(m_settings->verticalPosition(), 62.5);
+
+    // Dragging the overlay in adjusting mode writes the setting while this window
+    // is open; the row follows it instead of keeping the value it last showed.
+    m_settings->setHorizontalPosition(12.5);
+    QCOMPARE(horizontalPosition->property("value").toInt(), 125);
+
+    // A typed edit reaches the control through valueFromText when it is
+    // committed; drive that function directly, the way the spin box does on
+    // Enter, rather than going through the (GUI) text field. The function is a
+    // QML JS function, so read it as a QJSValue and call it.
+    const auto commitText = [](QObject *field, const QString &text) {
+        const QJSValue function = QQmlProperty(field, QStringLiteral("valueFromText")).read().value<QJSValue>();
+        return function.call(QJSValueList{QJSValue(text)}).toInt();
     };
-    QCOMPARE(modelEntries(verticalAnchor), QStringList({QStringLiteral("Top"), QStringLiteral("Bottom")}));
-    QCOMPARE(modelEntries(horizontalAnchor), QStringList({QStringLiteral("Left"), QStringLiteral("Center"), QStringLiteral("Right")}));
+    QVERIFY2(QQmlProperty(horizontalPosition, QStringLiteral("valueFromText")).read().value<QJSValue>().isCallable(),
+             "the horizontal-position row exposes its valueFromText function");
+    QVERIFY2(QQmlProperty(verticalPosition, QStringLiteral("valueFromText")).read().value<QJSValue>().isCallable(),
+             "the vertical-position row exposes its valueFromText function");
 
-    // The window opens on what the file says.
-    QCOMPARE(verticalAnchor->property("currentIndex").toInt(), static_cast<int>(m_settings->verticalAnchor()));
-    QCOMPARE(horizontalAnchor->property("currentIndex").toInt(), static_cast<int>(m_settings->horizontalAnchor()));
-
-    // Picking an entry writes its index, exactly as the control does it: set the
-    // index, then emit activated.
-    verticalAnchor->setProperty("currentIndex", static_cast<int>(Settings::EnumVerticalAnchor::Top));
-    QVERIFY2(QMetaObject::invokeMethod(verticalAnchor, "activated", Q_ARG(int, 0)), "the vertical anchor combo's activated signal is reachable");
-    QCOMPARE(static_cast<int>(m_settings->verticalAnchor()), static_cast<int>(Settings::EnumVerticalAnchor::Top));
-
-    horizontalAnchor->setProperty("currentIndex", static_cast<int>(Settings::EnumHorizontalAnchor::Right));
-    QVERIFY2(QMetaObject::invokeMethod(horizontalAnchor, "activated", Q_ARG(int, 2)), "the horizontal anchor combo's activated signal is reachable");
-    QCOMPARE(static_cast<int>(m_settings->horizontalAnchor()), static_cast<int>(Settings::EnumHorizontalAnchor::Right));
-
-    // The margins are plain integer keys, written on a modification.
-    QCOMPARE(verticalMargin->property("value").toInt(), m_settings->verticalMargin());
-    verticalMargin->setProperty("value", 120);
-    QVERIFY2(QMetaObject::invokeMethod(verticalMargin, "valueModified"), "the vertical margin spin box's valueModified signal is reachable");
-    QCOMPARE(m_settings->verticalMargin(), 120);
-
-    QCOMPARE(horizontalMargin->property("value").toInt(), m_settings->horizontalMargin());
-    horizontalMargin->setProperty("value", 30);
-    QVERIFY2(QMetaObject::invokeMethod(horizontalMargin, "valueModified"), "the horizontal margin spin box's valueModified signal is reachable");
-    QCOMPARE(m_settings->horizontalMargin(), 30);
-
-    // Each margin carries the sentence saying it belongs to its anchor.
-    const auto hasLabel = [this](const QString &text) {
-        const auto children = m_window->findChildren<QObject *>();
-        for (QObject *object : children) {
-            if (object->inherits("QQuickLabel") && object->property("text").toString() == text) {
-                return true;
-            }
-        }
-        return false;
+    const auto valueFromTextHolds = [&](QObject *field) {
+        // The commit runs against the value the control already shows: 12.5 %
+        // on the horizontal row after the drag above, 62.5 % on the vertical
+        // one after its arrow-key edit.
+        const int shown = field->property("value").toInt();
+        QVERIFY2(shown > 0, "the fallback is checked against a non-zero value");
+        // Empty text and a bare "." pass the validator but parse to NaN; the
+        // int value would take that as 0 and move the overlay to the screen
+        // edge, so both have to keep what the control shows.
+        QCOMPARE(commitText(field, QString()), shown);
+        QCOMPARE(commitText(field, QStringLiteral(".")), shown);
+        // A normal commit still parses, comma separator included ...
+        QCOMPARE(commitText(field, QStringLiteral("37.5 %")), 375);
+        QCOMPARE(commitText(field, QStringLiteral("37,5 %")), 375);
+        // ... and an out-of-range entry clamps to the control's range.
+        QCOMPARE(commitText(field, QStringLiteral("999 %")), 1000);
     };
-    QVERIFY2(hasLabel(QString::fromUtf8(kVerticalMarginHint)), "the vertical margin says which anchor it belongs to");
-    QVERIFY2(hasLabel(QString::fromUtf8(kHorizontalMarginHint)), "the horizontal margin says which anchor it belongs to");
+    valueFromTextHolds(horizontalPosition);
+    valueFromTextHolds(verticalPosition);
 
-    // The retired "Screen edge" and "Edge margin" rows are gone with the keys.
-    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("edgeField")) == nullptr, "the old screen-edge row is gone");
-    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("marginField")) == nullptr, "the old edge-margin row is gone");
+    // The old anchor and margin rows went with their keys.
+    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("verticalAnchorField")) == nullptr, "the old vertical-anchor row is gone");
+    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("horizontalAnchorField")) == nullptr, "the old horizontal-anchor row is gone");
+    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("verticalMarginField")) == nullptr, "the old vertical-margin row is gone");
+    QVERIFY2(m_window->findChild<QObject *>(QStringLiteral("horizontalMarginField")) == nullptr, "the old horizontal-margin row is gone");
 }
 
 void SettingsQmlTest::outputPicker()

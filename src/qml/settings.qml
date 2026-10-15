@@ -37,12 +37,11 @@ import org.kde.kirigami as Kirigami
  * built by a Repeater, because a Repeater's delegates are not part of the
  * window's object tree and the window's test counts the controls it finds there.
  *
- * The three enum combos (which lyric line to show, and the two anchors) bind
- * their currentIndex straight to the int the KConfigXT compiler generates,
- * because kconfig_compiler emits old-style nested enums with no Q_ENUM and does
- * not register the class as a QML type - QML cannot name
- * KShadowLrcSettings.EnumVerticalAnchor.Top. Their models are ordered to match
- * the kcfg <choices> blocks and must be kept in step with them.
+ * The enum combo (which lyric line to show) binds its currentIndex straight to
+ * the int the KConfigXT compiler generates, because kconfig_compiler emits
+ * old-style nested enums with no Q_ENUM and does not register the class as a QML
+ * type - QML cannot name KShadowLrcSettings.EnumDisplayMode.Both. Its model is
+ * ordered to match the kcfg <choices> block and must be kept in step with it.
  *
  * The output picker is the one control with no plain file-backed value to edit:
  * it lists the connected outputs from the `outputs` context property (a
@@ -378,39 +377,59 @@ Kirigami.ApplicationWindow {
                 onValueModified: settings.visibleLines = value
             }
 
-            // Where the overlay sits: each axis has an anchor naming the screen
-            // edge (or the centre) it holds on to, and a margin that is the gap
-            // to that edge. The box is only ever as large as the lyrics, so it
-            // hangs from whichever edge it holds on to and grows away from it as
-            // the text grows. The margins only mean something next to their own
-            // anchor, so each one sits under the anchor it belongs to and says so.
-            QQC2.ComboBox {
-                id: verticalAnchorField
-
-                objectName: "verticalAnchorField"
-                Kirigami.FormData.label: i18n("Vertical anchor:")
-                // The model order must match the <choices> order in
-                // src/config/kshadowlrcsettings.kcfg exactly: 0 = Top, 1 = Bottom.
-                model: [i18n("Top"), i18n("Bottom")]
-                currentIndex: settings.verticalAnchor
-                onActivated: settings.verticalAnchor = currentIndex
-            }
-
+            // Where the overlay sits: a point, not a place between two edges. The
+            // text box's horizontal centre and its top edge are percentages of
+            // the screen, and the layer-shell margins are re-derived from that
+            // point every time the lyrics change size, so a longer or shorter
+            // line never moves the text being read.
+            //
+            // QQC2.SpinBox is integer-only in this Qt - DoubleSpinBox is only
+            // exported from 6.11 and the project builds against 6.8 - so each
+            // control counts tenths of a percent: 0..1000 is 0.0..100.0 %, and
+            // the text reads as a percentage with one decimal. The wheel, the
+            // arrow keys and the step buttons all move one tenth (0.1 %) at a
+            // time, and the value can also be typed. The validator has to accept
+            // the " %" the text carries, or the field would refuse its own
+            // displayed value the moment a key is pressed.
             ColumnLayout {
-                Kirigami.FormData.label: i18n("Vertical margin:")
+                Kirigami.FormData.label: i18n("Horizontal position:")
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 15
                 spacing: Math.round(Kirigami.Units.smallSpacing / 2)
 
                 QQC2.SpinBox {
-                    id: verticalMarginField
+                    id: horizontalPositionField
 
-                    objectName: "verticalMarginField"
+                    objectName: "horizontalPositionField"
                     Layout.fillWidth: true
+                    editable: true
                     from: 0
-                    to: 5000
-                    value: settings.verticalMargin
-                    textFromValue: (value) => i18n("%1 px", value)
-                    onValueModified: settings.verticalMargin = value
+                    to: 1000
+                    stepSize: 1
+                    value: Math.round(settings.horizontalPosition * 10)
+                    textFromValue: (value) => i18n("%1 %", (value / 10).toFixed(1))
+                    // A typed edit becomes the value only on commit. An empty
+                    // field or a bare "." passes the validator but parses to
+                    // NaN, and assigning that to the int value would silently
+                    // drop it to 0 - the screen edge. Keep the value already
+                    // shown then, and clamp the rest to the control's range.
+                    valueFromText: (text) => {
+                        const tenths = Math.round(parseFloat(text.replace(",", ".")) * 10)
+                        return isNaN(tenths) ? value : Math.max(0, Math.min(1000, tenths))
+                    }
+                    validator: RegularExpressionValidator {
+                        regularExpression: /^\s*\d{0,3}([.,]\d*)?\s*%?$/
+                    }
+                    onValueModified: settings.horizontalPosition = value / 10
+
+                    // The overlay can be dragged while this window is open, which
+                    // rewrites the setting and would break the value binding
+                    // above; follow it explicitly, as the offset row does.
+                    Connections {
+                        target: settings
+                        function onHorizontalPositionChanged() {
+                            horizontalPositionField.value = Math.round(settings.horizontalPosition * 10)
+                        }
+                    }
                 }
 
                 QQC2.Label {
@@ -418,38 +437,44 @@ Kirigami.ApplicationWindow {
                     wrapMode: Text.WordWrap
                     font: Kirigami.Theme.smallFont
                     opacity: 0.7
-                    text: i18n("The gap to the screen edge named by the vertical anchor; on its own it does nothing.")
+                    text: i18n("The centre of the lyric text, as a percentage of the screen width.")
                 }
             }
 
-            QQC2.ComboBox {
-                id: horizontalAnchorField
-
-                objectName: "horizontalAnchorField"
-                Kirigami.FormData.label: i18n("Horizontal anchor:")
-                // The model order must match the <choices> order in
-                // src/config/kshadowlrcsettings.kcfg exactly:
-                // 0 = Left, 1 = Center, 2 = Right.
-                model: [i18n("Left"), i18n("Center"), i18n("Right")]
-                currentIndex: settings.horizontalAnchor
-                onActivated: settings.horizontalAnchor = currentIndex
-            }
-
             ColumnLayout {
-                Kirigami.FormData.label: i18n("Horizontal margin:")
+                Kirigami.FormData.label: i18n("Vertical position:")
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 15
                 spacing: Math.round(Kirigami.Units.smallSpacing / 2)
 
                 QQC2.SpinBox {
-                    id: horizontalMarginField
+                    id: verticalPositionField
 
-                    objectName: "horizontalMarginField"
+                    objectName: "verticalPositionField"
                     Layout.fillWidth: true
+                    editable: true
                     from: 0
-                    to: 5000
-                    value: settings.horizontalMargin
-                    textFromValue: (value) => i18n("%1 px", value)
-                    onValueModified: settings.horizontalMargin = value
+                    to: 1000
+                    stepSize: 1
+                    value: Math.round(settings.verticalPosition * 10)
+                    textFromValue: (value) => i18n("%1 %", (value / 10).toFixed(1))
+                    // As above: a commit of NaN (empty field, bare ".") must
+                    // not become 0 %, and the tenths are clamped to the range.
+                    valueFromText: (text) => {
+                        const tenths = Math.round(parseFloat(text.replace(",", ".")) * 10)
+                        return isNaN(tenths) ? value : Math.max(0, Math.min(1000, tenths))
+                    }
+                    validator: RegularExpressionValidator {
+                        regularExpression: /^\s*\d{0,3}([.,]\d*)?\s*%?$/
+                    }
+                    onValueModified: settings.verticalPosition = value / 10
+
+                    // As above: a drag in adjusting mode rewrites the setting.
+                    Connections {
+                        target: settings
+                        function onVerticalPositionChanged() {
+                            verticalPositionField.value = Math.round(settings.verticalPosition * 10)
+                        }
+                    }
                 }
 
                 QQC2.Label {
@@ -457,7 +482,7 @@ Kirigami.ApplicationWindow {
                     wrapMode: Text.WordWrap
                     font: Kirigami.Theme.smallFont
                     opacity: 0.7
-                    text: i18n("The gap to the screen edge named by the horizontal anchor; on its own it does nothing.")
+                    text: i18n("The top edge of the lyric text, as a percentage of the screen height; the text grows downward from here, so the line being read stays put.")
                 }
             }
 

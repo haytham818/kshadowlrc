@@ -6,7 +6,9 @@
 //     count;
 //   - disabling a provider is respected by the engine;
 //   - the lyric offset round-trips between tracker and settings without
-//     oscillating (each direction emits exactly once per change).
+//     oscillating (each direction emits exactly once per change);
+//   - the placement point is two doubles whose changed signals fire once per
+//     real change.
 //
 // XDG_CONFIG_HOME is pointed at a temporary directory before the first config
 // is opened, so the developer's real kshadowlrcrc is never touched. No network,
@@ -54,6 +56,7 @@ private Q_SLOTS:
     void displayModeDrivesTheController();
     void visibleLinesDriveTheUpcomingCount();
     void providerSwitchesAreRespected();
+    void placementChangesAreAnnounced();
     void offsetRoundTripsExactlyOnce();
     void rewritingTheSameOffsetEmitsNothing();
 
@@ -84,12 +87,10 @@ void SettingsWiringTest::defaultsReadFromTheEmptyConfig()
     // --- defaults read from the (empty) config file -------------------------
     QVERIFY(m_controller.displayMode() == 2); // Both
     QVERIFY(providerNames(m_controller) == QStringList({QStringLiteral("netease"), QStringLiteral("lrclib")}));
-    // The placement defaults reproduce the old single-edge look: bottom edge,
-    // 64 px above it, horizontally centred.
-    QVERIFY(m_settings->verticalAnchor() == KShadowLrcSettings::EnumVerticalAnchor::Bottom);
-    QVERIFY(m_settings->verticalMargin() == 64);
-    QVERIFY(m_settings->horizontalAnchor() == KShadowLrcSettings::EnumHorizontalAnchor::Center);
-    QVERIFY(m_settings->horizontalMargin() == 0);
+    // The placement defaults put the text box's centre at the middle of the
+    // screen and its top edge 80 % down.
+    QVERIFY(qFuzzyCompare(m_settings->horizontalPosition(), 50.0));
+    QVERIFY(qFuzzyCompare(m_settings->verticalPosition(), 80.0));
     QVERIFY(m_settings->lyricOffsetMs() == 0);
     QVERIFY(m_trackerOffsetEmits == 0); // wiring startup does not emit
     QVERIFY(m_settingsOffsetEmits == 0);
@@ -129,6 +130,31 @@ void SettingsWiringTest::providerSwitchesAreRespected()
     QVERIFY(providerNames(m_controller) == QStringList({QStringLiteral("netease")}));
     m_settings->setLrclibEnabled(true);
     QVERIFY(providerNames(m_controller) == QStringList({QStringLiteral("netease"), QStringLiteral("lrclib")}));
+}
+
+void SettingsWiringTest::placementChangesAreAnnounced()
+{
+    // --- the placement point is two doubles, each announcing its change once
+    int horizontalEmits = 0;
+    int verticalEmits = 0;
+    QObject::connect(m_settings.get(), &KShadowLrcSettings::horizontalPositionChanged, this, [&horizontalEmits] {
+        ++horizontalEmits;
+    });
+    QObject::connect(m_settings.get(), &KShadowLrcSettings::verticalPositionChanged, this, [&verticalEmits] {
+        ++verticalEmits;
+    });
+
+    m_settings->setHorizontalPosition(12.5);
+    m_settings->setVerticalPosition(62.5);
+    QVERIFY(horizontalEmits == 1);
+    QVERIFY(verticalEmits == 1);
+    QVERIFY(qFuzzyCompare(m_settings->horizontalPosition(), 12.5));
+    QVERIFY(qFuzzyCompare(m_settings->verticalPosition(), 62.5));
+
+    // Re-writing the same value emits nothing: a drag that lands on the value it
+    // started from cannot spin the wiring.
+    m_settings->setHorizontalPosition(12.5);
+    QVERIFY(horizontalEmits == 1);
 }
 
 void SettingsWiringTest::offsetRoundTripsExactlyOnce()

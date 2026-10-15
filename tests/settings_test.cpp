@@ -66,10 +66,8 @@ void SettingsTest::defaultsAndFirstWrite()
     QVERIFY2(settings->outlineEnabled() == true, "outlineEnabled default is true");
     QVERIFY2(settings->displayMode() == kshadowlrc::KShadowLrcSettings::EnumDisplayMode::Both, "displayMode default is Both");
     QVERIFY2(settings->visibleLines() == 2, "visibleLines default is 2");
-    QVERIFY2(settings->verticalAnchor() == kshadowlrc::KShadowLrcSettings::EnumVerticalAnchor::Bottom, "verticalAnchor default is Bottom");
-    QVERIFY2(settings->verticalMargin() == 64, "verticalMargin default is 64");
-    QVERIFY2(settings->horizontalAnchor() == kshadowlrc::KShadowLrcSettings::EnumHorizontalAnchor::Center, "horizontalAnchor default is Center");
-    QVERIFY2(settings->horizontalMargin() == 0, "horizontalMargin default is 0");
+    QVERIFY2(qFuzzyCompare(settings->horizontalPosition(), 50.0), "horizontalPosition default is 50.0");
+    QVERIFY2(qFuzzyCompare(settings->verticalPosition(), 80.0), "verticalPosition default is 80.0");
     QVERIFY2(settings->clickThrough() == true, "clickThrough default is true");
     QVERIFY2(settings->outputName() == QString(), "outputName default is empty");
     QVERIFY2(settings->lyricOffsetMs() == 0, "lyricOffsetMs default is 0");
@@ -80,23 +78,21 @@ void SettingsTest::defaultsAndFirstWrite()
     QVERIFY2(!QFile::exists(path), "no config file exists before the first write");
 
     // A property change is announced and then written to disk.
-    bool verticalAnchorChanged = false;
-    QObject::connect(settings.get(), &kshadowlrc::KShadowLrcSettings::verticalAnchorChanged, [&verticalAnchorChanged] {
-        verticalAnchorChanged = true;
+    bool horizontalPositionChanged = false;
+    QObject::connect(settings.get(), &kshadowlrc::KShadowLrcSettings::horizontalPositionChanged, [&horizontalPositionChanged] {
+        horizontalPositionChanged = true;
     });
 
     settings->setFontSize(48); // General
     settings->setTextColor(QStringLiteral("#123456")); // General
-    settings->setVerticalAnchor(kshadowlrc::KShadowLrcSettings::EnumVerticalAnchor::Top); // General
-    settings->setVerticalMargin(12); // General
-    settings->setHorizontalAnchor(kshadowlrc::KShadowLrcSettings::EnumHorizontalAnchor::Left); // General
-    settings->setHorizontalMargin(7); // General
+    settings->setHorizontalPosition(12.5); // General
+    settings->setVerticalPosition(62.5); // General
     settings->setLyricOffsetMs(250); // Playback
     settings->setSyncIntervalMs(500); // Playback
     settings->setNeteaseEnabled(false); // Providers
     settings->setLrclibEnabled(false); // Providers
 
-    QVERIFY2(verticalAnchorChanged, "verticalAnchorChanged fires on a value change");
+    QVERIFY2(horizontalPositionChanged, "horizontalPositionChanged fires on a value change");
     QVERIFY2(QFile::exists(path), "the config file appears after a write");
 }
 
@@ -110,10 +106,8 @@ void SettingsTest::roundTrip()
 
     QVERIFY2(settings->fontSize() == 48, "fontSize round-trips (General)");
     QVERIFY2(settings->textColor() == QStringLiteral("#123456"), "textColor round-trips (General)");
-    QVERIFY2(settings->verticalAnchor() == kshadowlrc::KShadowLrcSettings::EnumVerticalAnchor::Top, "verticalAnchor round-trips (General)");
-    QVERIFY2(settings->verticalMargin() == 12, "verticalMargin round-trips (General)");
-    QVERIFY2(settings->horizontalAnchor() == kshadowlrc::KShadowLrcSettings::EnumHorizontalAnchor::Left, "horizontalAnchor round-trips (General)");
-    QVERIFY2(settings->horizontalMargin() == 7, "horizontalMargin round-trips (General)");
+    QVERIFY2(qFuzzyCompare(settings->horizontalPosition(), 12.5), "horizontalPosition round-trips (General)");
+    QVERIFY2(qFuzzyCompare(settings->verticalPosition(), 62.5), "verticalPosition round-trips (General)");
     QVERIFY2(settings->lyricOffsetMs() == 250, "lyricOffsetMs round-trips (Playback)");
     QVERIFY2(settings->syncIntervalMs() == 500, "syncIntervalMs round-trips (Playback)");
     QVERIFY2(settings->neteaseEnabled() == false, "neteaseEnabled round-trips (Providers)");
@@ -132,17 +126,17 @@ void SettingsTest::explicitFileOverload()
     auto other = KSharedConfig::openConfig(otherPath, KConfig::SimpleConfig);
 
     std::unique_ptr<kshadowlrc::KShadowLrcSettings> settings(kshadowlrc::createSettings(other));
-    QVERIFY2(settings->verticalMargin() == 64, "a different config file starts from defaults");
+    QVERIFY2(qFuzzyCompare(settings->verticalPosition(), 80.0), "a different config file starts from defaults");
     QVERIFY2(!QFile::exists(otherPath), "the replacement file is not written before a change");
 
-    settings->setVerticalMargin(7);
+    settings->setVerticalPosition(7.0);
     QVERIFY2(QFile::exists(otherPath), "the replacement file appears after a change");
     QVERIFY2(QFile::exists(path), "writing to the replacement file leaves the main one untouched");
 
     KSharedConfig::openConfig(otherPath, KConfig::SimpleConfig)->reparseConfiguration();
     auto reparsed = KSharedConfig::openConfig(otherPath, KConfig::SimpleConfig);
     std::unique_ptr<kshadowlrc::KShadowLrcSettings> roundTripped(kshadowlrc::createSettings(reparsed));
-    QVERIFY2(roundTripped->verticalMargin() == 7, "the replacement file round-trips");
+    QVERIFY2(qFuzzyCompare(roundTripped->verticalPosition(), 7.0), "the replacement file round-trips");
 }
 
 int main(int argc, char **argv)
