@@ -36,7 +36,7 @@ OverlayWindow::OverlayWindow(QWindow *parent)
     // of waiting for QML's translation signal: the surface follows the pointer,
     // so the pointer barely moves within the window and that signal fires only
     // when the compositor's repositioning lags. updateDrag() is unchanged and
-    // stays the one place the gesture is applied; applyDragDelta() holds the
+    // stays the one place the gesture is applied; applyPointerSample() holds the
     // arithmetic it feeds.
     m_dragPoll.setTimerType(Qt::PreciseTimer);
     m_dragPoll.setInterval(8);
@@ -338,6 +338,13 @@ void OverlayWindow::beginDrag(bool handlesFont)
         // box changes size, and the surface is frozen at this box for as long as
         // the drag lasts so nothing resizes under the pointer.
         m_dragBox = adjustmentBox();
+
+        // Seed the sample sequence with the grab itself: the very reading just
+        // taken, the surface top-left that reading was measured against, and the
+        // unclamped ideal the drag starts from.
+        m_dragPositionSample = m_dragOriginCursor;
+        m_dragIdealTopLeft = placementBoxTopLeft(m_dragStartPlacement, m_dragBox, screenSize());
+        m_dragSampleSurface = m_dragIdealTopLeft;
     }
 
     // Take the drag over from QML's translation signal: read the reported
@@ -347,12 +354,12 @@ void OverlayWindow::beginDrag(bool handlesFont)
 
 void OverlayWindow::updateDrag()
 {
-    // The guard lives in applyDragDelta(), so this stays nothing but the platform
-    // report fed to the gesture's arithmetic.
-    applyDragDelta(QCursor::pos() - m_dragOriginCursor);
+    // The guard lives in applyPointerSample(), so this stays nothing but the
+    // platform's own report fed to the gesture's arithmetic.
+    applyPointerSample(QCursor::pos());
 }
 
-void OverlayWindow::applyDragDelta(const QPoint &reportedDelta)
+void OverlayWindow::applyPointerSample(const QPoint &reportedPointer)
 {
     if (!m_dragging) {
         return;
@@ -365,27 +372,43 @@ void OverlayWindow::applyDragDelta(const QPoint &reportedDelta)
         // vertical movement is already clean. The horizontal report does carry
         // the surface's own movement (the box widens about its centre, so its
         // left edge moves), which is why the gesture reads only the y component.
-        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, reportedDelta));
+        setAdjustingFontSize(fontSizeForDrag(m_dragStartFontSize, reportedPointer - m_dragOriginCursor));
+        return;
+    }
+
+    // No new sample: the pointer is where it was, so nothing moves. This is the
+    // whole fix for a box that walked off screen. The poll keeps firing while the
+    // pointer is still, but the sample it reads freezes with the pointer; adding
+    // that frozen movement again on every tick sent the box flying. Field
+    // evidence: a 1.2 s window with 0 wl_pointer.motion events, 150 set_margin
+    // requests and margin top rising 1 px every ~8 ms (+150 px in all), while the
+    // sample's x never changed.
+    if (reportedPointer == m_dragPositionSample) {
         return;
     }
 
     const QSize screen = screenSize();
-    // The report is not the pointer's movement on its own: it is missing the
-    // surface's own movement, because the surface is exactly what the drag moves
-    // and Wayland never tells it its real position (see the class comment). So the
-    // surface's share is added back by moving from the top-left already pushed --
-    // the best estimate of where the compositor has applied it -- rather than from
-    // the grab-time top-left, which would count the surface's movement twice and
-    // let the box travel only half as far as the pointer. Field evidence: one
-    // 4883-event drag showed a surface-local cursor span of 811 px and a margin
-    // span of 811 px against a real pointer travel of 1622 px -- exactly half.
-    const QPoint pushed = placementBoxTopLeft(m_placement, m_dragBox, screen);
-    const QPoint moved = draggedBoxTopLeft(pushed, reportedDelta);
-    // Clamped so the box can never be dragged half off-screen, then turned into
-    // the point. No live magnet: snapping while the drag is in flight is what
-    // makes the position jump within AdjustMagnetPx of the middle; the magnet is
-    // applied once, on release.
-    setPlacement(placementFor(clampToScreen(moved, m_dragBox, screen), m_dragBox, screen, 0));
+    // Where the compositor has the surface right now: the top-left the last push
+    // put there, read back through the placement. This is the surface the current
+    // sample was measured against.
+    const QPoint surfaceNow = placementBoxTopLeft(m_placement, m_dragBox, screen);
+    // The pointer's real movement since the previous sample: the change in the
+    // reading plus the surface's own movement over the same interval, so the
+    // surface's share is restored exactly once (see dragPointerDelta()). It goes
+    // on the ideal, which is never clamped, so a box pinned at an edge keeps the
+    // travel it missed and comes back exactly under the pointer.
+    m_dragIdealTopLeft += dragPointerDelta(reportedPointer, m_dragPositionSample, surfaceNow, m_dragSampleSurface);
+
+    // Clamp the pushed value only, never the ideal above. No live magnet:
+    // snapping while the drag is in flight is what makes the position jump within
+    // AdjustMagnetPx of the middle; the magnet is applied once, on release.
+    setPlacement(placementFor(clampToScreen(m_dragIdealTopLeft, m_dragBox, screen), m_dragBox, screen, 0));
+
+    // Remember this sample, and - for the next one - the surface it was measured
+    // against, which is the top-left read above, not the just-pushed one: the
+    // next step's surfaceNow already includes this step's push.
+    m_dragPositionSample = reportedPointer;
+    m_dragSampleSurface = surfaceNow;
 }
 
 void OverlayWindow::endDrag()

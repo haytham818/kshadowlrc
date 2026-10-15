@@ -49,10 +49,12 @@ namespace kshadowlrc
  * offset from the true screen position -- it is not a screen coordinate. Its
  * difference across a gesture is not the pointer's own movement either: it also
  * carries whatever the surface itself moved by, and the surface is exactly what
- * the drag moves. applyDragDelta() corrects for that: it adds the delta to the
- * top-left actually pushed, the best estimate of where the compositor has put
- * the surface, so the surface's own movement cancels out and the box tracks the
- * pointer 1:1.
+ * the drag moves. So each reading is used exactly once: the pointer's real
+ * movement between two readings is the change in the reading plus the change in
+ * the surface position the drag pushed over the same interval (dragPointerDelta),
+ * accumulated on an ideal that is only clamped when it is pushed. A reading that
+ * has not changed is no movement at all, so a pointer that stops never moves the
+ * box.
  */
 class OverlayWindow : public QQuickView
 {
@@ -187,24 +189,24 @@ public:
      * plus the window origin Qt believes in (see the class comment). The gestures
      * work from the difference against this value, and that difference carries
      * the surface's own movement because the surface is what the drag moves;
-     * applyDragDelta() adds that movement back. Also starts the poll that keeps
-     * reading the reported cursor until the drag ends.
+     * applyPointerSample() adds that movement back. Also starts the poll that
+     * keeps reading the reported cursor until the drag ends.
      */
     Q_INVOKABLE void beginDrag(bool handlesFont);
     /*!
-     * Feed the current cursor's report to applyDragDelta(). Called by the drag
-     * poll every few milliseconds, and once immediately by QML's
+     * Feed the current cursor's report to applyPointerSample(). Called by the
+     * drag poll every few milliseconds, and once immediately by QML's
      * onActiveTranslationChanged. Recomputing while the pointer has not moved
-     * does no work: both setters compare before pushing.
+     * does no work: an unchanged sample is detected before anything is computed.
      */
     Q_INVOKABLE void updateDrag();
     /*!
-     * The drag's arithmetic, for a pointer the platform reports as having moved
-     * \a reportedDelta since the drag was grabbed. updateDrag() is only this fed
-     * with the platform's own report; the movement is an argument so a test can
-     * drive a whole gesture, which the offscreen cursor cannot (it cannot move).
+     * Feed one reported pointer sample to the drag. updateDrag() is only this
+     * fed with QCursor::pos(); the sample is an argument so a test can drive a
+     * whole gesture, which the offscreen cursor cannot (it cannot move) -- and
+     * can feed the same sample twice, which is how the box walked off screen.
      */
-    void applyDragDelta(const QPoint &reportedDelta);
+    void applyPointerSample(const QPoint &reportedPointer);
     /*!
      * Finish the drag, stopping the poll and reporting the result through the
      * *Edited signals. A gesture that changed nothing reports nothing, so only a
@@ -311,6 +313,19 @@ private:
     Placement m_dragStartPlacement;
     QSize m_dragBox = QSize(1, 1);
     int m_dragStartFontSize = 0;
+
+    // Position-drag state. The drag is a sequence of pointer samples, and the
+    // arithmetic models each sample as the pointer minus the surface position the
+    // compositor has applied at that moment (see dragPointerDelta()).
+    // m_dragPositionSample is the last sample taken; m_dragSampleSurface is the
+    // surface top-left that sample was measured against, i.e. the position read
+    // at the start of the step that produced it - so it lags m_placement by one
+    // step, it is not the position that step pushed. m_dragIdealTopLeft is the
+    // running ideal before clamping, so a box held at a screen edge still carries
+    // the travel it missed and comes back exactly under the pointer.
+    QPoint m_dragPositionSample;
+    QPoint m_dragSampleSurface;
+    QPoint m_dragIdealTopLeft;
 
     // Polls the reported cursor while a drag is in flight. The surface follows
     // the pointer, so QML's translation delta barely changes and cannot be the

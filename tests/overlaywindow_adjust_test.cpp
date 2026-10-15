@@ -17,7 +17,7 @@
 // The offscreen cursor cannot move, so a drag driven only through the public
 // API is motionless here: that is what the "a motionless click emits nothing"
 // check relies on. The platform's report of a moving pointer is modelled as an
-// argument instead (applyDragDelta), so a whole gesture can still be driven
+// argument instead (applyPointerSample), so a whole gesture can still be driven
 // offline -- see positionDragFollowsThePointerUnderThePlatformsReport. Where a
 // committed edit is under test the live point is set directly through
 // setPlacement().
@@ -25,6 +25,7 @@
 #include "config/settings.h"
 #include "platform/overlaywindow.h"
 
+#include <QCursor>
 #include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QTest>
@@ -365,28 +366,33 @@ void OverlayWindowAdjustTest::repeatedPlacementPushesTheSameLayerStateOnce()
 
 void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsReport()
 {
-    // A position drag, driven offline through the two public seams that exist for
+    // A position drag, driven offline through the one public seam that exists for
     // it. The offscreen cursor cannot move, so updateDrag() -- which is just
-    // applyDragDelta() fed the platform's own report -- would feed a zero delta
+    // applyPointerSample() fed QCursor::pos() -- would feed one frozen sample
     // forever; instead the platform's report is modelled here as an argument and
-    // the whole gesture is played through applyDragDelta().
+    // the whole gesture is played through applyPointerSample().
     //
     // The model is the one the field logs show: QCursor::pos() is the window
     // origin Qt believes in (a constant under Wayland, because a layer surface is
     // never told its real position) plus the pointer's place inside the surface,
-    // and the surface is exactly what the drag moves. Measured against the
-    // surface, the report therefore equals the change in (pointer - surface
-    // top-left):
-    //   report = (pointerNow - surfaceTopLeftNow) - (pointerAtGrab - grabTopLeft)
-    // The "surface top-left" is the window's own last pushed top-left, read back
-    // through placementBoxTopLeft() -- a faithful stand-in for where the
-    // compositor has applied the surface. That is precisely why the report
-    // carries the surface's own movement, the bug the drag had: one real drag of
-    // 4883 events showed a surface-local cursor span of 811 px and a margin span
-    // of 811 px against a real pointer travel of 1622 px, exactly half. Adding
-    // the report to the already-pushed top-left cancels the surface's own share,
-    // so the box tracks the pointer 1:1, and the clamp stays transparent: pushed
-    // off the edge and back, the box returns exactly under the pointer.
+    // and the surface is exactly what the drag moves. So a report is
+    //   s_k = pointer_k - P_k
+    // where P_k is the top-left the drag had pushed when the sample was generated
+    // -- read back before the call through placementBoxTopLeft(). That reading
+    // carries the surface's own movement, which is why the drag puts it back: a
+    // real drag of 4883 events showed a surface-local cursor span of 811 px and a
+    // margin span of 811 px against a real pointer travel of 1622 px, exactly
+    // half. The rewrite accumulates that movement on an unclamped ideal and
+    // clamps only what it pushes, so the box tracks the pointer 1:1 and the clamp
+    // stays transparent: pushed off the edge and back, the box returns exactly
+    // under the pointer.
+    //
+    // The regression that matters most here is the pointer stopping. Field log: a
+    // 1.2 s window with 0 wl_pointer.motion events, 150 set_margin requests and
+    // margin top rising 1 px every ~8 ms (+150 px in all), while the sample was
+    // frozen -- the frozen reading was being re-added on every poll and the box
+    // walked off screen. A whole run of identical samples is fed below and must
+    // move nothing.
     OverlayWindow overlay;
     overlay.setContentSize(400, 100);
     overlay.beginAdjusting();
@@ -402,10 +408,11 @@ void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsRepo
     const Placement grabPlacement{50.0, 80.0};
     overlay.setPlacement(grabPlacement);
     const QPoint grabTopLeft = placementBoxTopLeft(grabPlacement, box, screen);
-    // A real pointer sits somewhere inside the surface (the box plus its
-    // padding); any point works, only its offset against the box matters.
-    const QPoint pointerAtGrab = grabTopLeft + QPoint(box.width() / 2, box.height() / 2);
 
+    // The reading at the grab, as the platform reports it: the offscreen cursor
+    // can be read but not moved, so it fixes the frame's constant origin. Hold on
+    // to it before the grab, which reads the same value into the drag.
+    const QPoint reportedAtGrab = QCursor::pos();
     overlay.beginDrag(false);
 
     // The surface's top-left the window has pushed, as the compositor would see
@@ -413,13 +420,12 @@ void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsRepo
     const auto pushedTopLeft = [&overlay, box, screen] {
         return placementBoxTopLeft(overlay.placement(), box, screen);
     };
-    // What the platform reports for a pointer now at \a pointerNow, given the
-    // surface the window has actually pushed.
-    const auto reportedDelta = [&](QPoint pointerNow) {
-        return (pointerNow - pushedTopLeft()) - (pointerAtGrab - grabTopLeft);
-    };
-    // The top-left the box should end each step at, clamped exactly as the drag
-    // clamps: the grab plus the pointer's whole travel, kept inside the screen.
+    // The absolute pointer in the frame the platform reports, offset from the
+    // screen by the same constant the reading carries, so s_k = pointer_k - P_k
+    // comes out exactly right at the grab (s_0 = reportedAtGrab).
+    const QPoint pointerAtGrab = reportedAtGrab + grabTopLeft;
+    // The top-left the box should be at after a pointer at pointerNow, clamped as
+    // the drag clamps: the grab plus the pointer's whole travel, pinned to screen.
     const auto expectedTopLeft = [&](QPoint pointerNow) {
         return clampToScreen(grabTopLeft + (pointerNow - pointerAtGrab), box, screen);
     };
@@ -430,7 +436,7 @@ void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsRepo
     const QPoint offRight(screen.width() + 600, pointerAtGrab.y() - 20);
     const QPoint backInside(screen.width() / 2 + 100, pointerAtGrab.y() - 20);
     const QPoint nearBottom(backInside.x(), screen.height() + 300);
-    const QPoint steps[] = {
+    const QList<QPoint> steps = {
         pointerAtGrab + QPoint(30, -10),
         pointerAtGrab + QPoint(70, -30),
         offRight,
@@ -438,9 +444,45 @@ void OverlayWindowAdjustTest::positionDragFollowsThePointerUnderThePlatformsRepo
         nearBottom,
     };
 
-    for (const QPoint &pointerNow : steps) {
-        overlay.applyDragDelta(reportedDelta(pointerNow));
+    for (int i = 0; i < int(steps.size()); ++i) {
+        const QPoint pointerNow = steps.at(i);
+        // The report the platform would make, measured against the surface pushed
+        // so far -- read before the call, exactly as the drag reads it.
+        const QPoint sample = pointerNow - pushedTopLeft();
+        overlay.applyPointerSample(sample);
         QCOMPARE(pushedTopLeft(), expectedTopLeft(pointerNow));
+
+        if (i == 0) {
+            // The freeze regression, and the one that really bites. It sits on an
+            // in-bounds step, where neither the ideal nor the pushed top-left is
+            // clamped: if the frozen reading were re-added the box would move and
+            // this would fail. At a screen edge the clamp pins the pushed value
+            // whatever the arithmetic does, so the same assertion there would hold
+            // even with the guard gone -- the edge would hide the movement. The
+            // pointer stops here: the platform keeps reporting the same sample and
+            // the drag poll keeps firing, and none of it may move the box.
+            const Placement placementWhileStopped = overlay.placement();
+            const QPoint pushedWhileStopped = pushedTopLeft();
+            for (int poll = 0; poll < 50; ++poll) {
+                overlay.applyPointerSample(sample);
+                QCOMPARE(overlay.placement(), placementWhileStopped);
+                QCOMPARE(pushedTopLeft(), pushedWhileStopped);
+            }
+        }
+
+        if (i == 2) {
+            // Supplementary, after the off-edge step: the same freeze with the box
+            // pinned at the edge, covering that combination. On its own it proves
+            // little -- the clamp keeps the pushed value green either way -- so the
+            // in-bounds freeze above carries the bite.
+            const Placement placementWhileStopped = overlay.placement();
+            const QPoint pushedWhileStopped = pushedTopLeft();
+            for (int poll = 0; poll < 50; ++poll) {
+                overlay.applyPointerSample(sample);
+                QCOMPARE(overlay.placement(), placementWhileStopped);
+                QCOMPARE(pushedTopLeft(), pushedWhileStopped);
+            }
+        }
     }
 }
 

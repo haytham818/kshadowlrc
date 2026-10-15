@@ -75,24 +75,32 @@ Placement placementFor(QPoint boxTopLeft, QSize box, QSize screen, int magnetPx)
 QPoint clampToScreen(QPoint boxTopLeft, QSize box, QSize screen);
 
 /*!
- * The box's top-left a position drag should ask for: where the drag has already
- * put the box, \a pushedTopLeft, displaced by \a reportedDelta - the movement
- * the platform reports for the pointer since the drag was grabbed.
+ * The pointer's real movement between two reported samples, given where the
+ * overlay's own surface was at each of them.
  *
- * What the platform reports is not a screen coordinate. On Wayland it is Qt's
- * idea of the window's own origin plus the pointer's position inside the
- * surface, and the surface is the very thing a position drag moves. So the
- * reported displacement is the pointer's real movement *minus* the movement of
- * the surface itself. To follow the pointer 1:1 that share has to be added
- * back, and the best estimate of where the surface is right now is the top-left
- * last pushed to it - hence \a pushedTopLeft is the base the displacement goes
- * on.
+ * What the platform reports is not a screen coordinate: it is the pointer's
+ * position *inside our own surface* (plus a constant origin Qt believes in).
+ * The difference of two readings is therefore the pointer's real movement
+ * *minus* the movement of the surface itself - and the surface is exactly what a
+ * position drag moves, so that share is missing from every reading. Both terms
+ * here are taken over the same interval: the change in the reading plus the
+ * change in the surface position the drag had pushed over that interval. The
+ * compositor applies a surface position with some delay, but a constant delay
+ * cancels between the two terms, so their sum is the pointer's real movement
+ * exactly, whatever that delay is.
  *
- * Applying the same displacement to the top-left captured at grab time instead
- * counts the surface's own movement twice: the box then travels half as far as
- * the pointer and never catches up. That is the drag bug this replaces.
+ * Two wrong turns are worth naming because both were really taken. Applying the
+ * reading's change to the top-left captured at grab time counts the surface's
+ * own movement twice and the box travels half as far as the pointer. And keeping
+ * the movement since the grab as a value, adding it again on every poll to a
+ * top-left that keeps advancing, runs away the moment the pointer stops: the
+ * reading then freezes, but the poll keeps firing, so the last frozen movement
+ * is added over and over and the box walks off screen.
+ *
+ * The caller must only call this when a new sample has arrived; a pointer that
+ * has stopped then contributes a zero movement.
  */
-QPoint draggedBoxTopLeft(QPoint pushedTopLeft, QPoint reportedDelta);
+QPoint dragPointerDelta(QPoint reportedNow, QPoint reportedBefore, QPoint surfaceNow, QPoint surfaceBefore);
 
 /*!
  * The layer-shell anchors and margins that put the box's top-left at

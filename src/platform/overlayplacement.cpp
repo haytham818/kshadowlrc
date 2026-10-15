@@ -84,12 +84,13 @@ QPoint clampToScreen(QPoint boxTopLeft, QSize box, QSize screen)
     return QPoint(std::clamp(boxTopLeft.x(), 0, maxX), std::clamp(boxTopLeft.y(), 0, maxY));
 }
 
-QPoint draggedBoxTopLeft(QPoint pushedTopLeft, QPoint reportedDelta)
+QPoint dragPointerDelta(QPoint reportedNow, QPoint reportedBefore, QPoint surfaceNow, QPoint surfaceBefore)
 {
-    // The platform has already subtracted the surface's own movement from what
-    // it reports (see the header), so from the last pushed top-left the movement
-    // is exactly the pointer's: the box follows 1:1.
-    return pushedTopLeft + reportedDelta;
+    // The reading's own change is missing the surface's share - the surface is
+    // what the drag moves and Wayland never tells it its real position - so the
+    // surface's own change over the same interval is added back. Same interval,
+    // so the compositor's application delay cancels between the two terms.
+    return (reportedNow - reportedBefore) + (surfaceNow - surfaceBefore);
 }
 
 int fontSizeForDrag(int startPoints, QPointF delta)

@@ -188,17 +188,22 @@ void OverlayPlacementTest::onePointHoldsForAnyBoxSize()
 void OverlayPlacementTest::positionDragFollowsTheReportedPointerExactly()
 {
     // 9. A position drag must follow the pointer 1:1 even though the platform
-    //    never reports a screen coordinate. On Wayland the reported value is
-    //    Qt's idea of the window origin (the layer surface sits at the screen
-    //    origin) plus the pointer inside the surface - and the surface is what
-    //    the drag moves. So the reported movement is the pointer's real movement
-    //    *minus* the surface's own, and the base it goes on must be the top-left
-    //    last pushed, never the one captured at grab time.
+    //    never reports a screen coordinate. On Wayland the report is Qt's idea of
+    //    the window origin (a layer surface sits at the screen origin) plus the
+    //    pointer *inside the surface*, and the surface is exactly what the drag
+    //    moves. So a single reading is the pointer's real position *minus* the
+    //    surface's, and the surface's own movement over the same interval has to
+    //    be added back for the pointer's real movement to come out.
     //
-    //    The live log that drove the fix, on a 2560x1440 screen: over one drag
-    //    the pointer's in-surface coordinate spanned 811 px and the margins we
-    //    asked for spanned 811 px, while the pointer really travelled 1622 px.
-    //    The old grab-time base counted the surface's own movement twice.
+    //    The live log that drove the fix, on a 2560x1440 screen: over one drag the
+    //    pointer's in-surface coordinate spanned 811 px and the margins we asked
+    //    for spanned 811 px, while the pointer really travelled 1622 px -- the
+    //    reading's share is missing, so without putting it back the box moves at
+    //    half speed. A later log caught the opposite failure: a 1.2 s window with
+    //    0 wl_pointer.motion events, 150 set_margin requests and margin top rising
+    //    1 px every ~8 ms (+150 px in all), while the sample itself was frozen --
+    //    the frozen reading was being added again on every poll. Both failures are
+    //    guarded below.
     const QSize screen(2560, 1440);
     const QSize box(400, 100);
     const Placement placement{50.0, 40.0};
@@ -207,9 +212,9 @@ void OverlayPlacementTest::positionDragFollowsTheReportedPointerExactly()
     const QPoint pointerAtGrab = grabTopLeft + QPoint(100, 50);
 
     // Four steps of different sizes, the pointer reversing on the second one.
-    // x sums to 1622 while the even-positioned steps sum to 811, so the old
-    // base below lands exactly on half the trip; the small y wiggle nets 40.
-    // All integers, so every comparison in this test is exact.
+    // x sums to 1622 while the even-positioned steps sum to 811, so the grab-time
+    // base below lands exactly on half the trip; the small y wiggle nets 40. All
+    // integers, so every comparison in this test is exact.
     const QList<QPoint> steps = {
         QPoint(300, -40),
         QPoint(-200, 60),
@@ -217,45 +222,73 @@ void OverlayPlacementTest::positionDragFollowsTheReportedPointerExactly()
         QPoint(1011, -40),
     };
 
-    // A drag in progress: the top-left we have already pushed to the surface,
-    // starting at the grabbed one, and the pointer's real position.
-    QPoint pushedTopLeft = grabTopLeft;
-    QPoint pointer = pointerAtGrab;
+    // 9a. The rewrite, sample by sample. s_k is what the compositor reports for
+    //     the pointer at pointer_k: the pointer minus the surface top-left P_k the
+    //     drag had already pushed when the sample was generated. We push each
+    //     step's result before taking the next sample, so P_k is the top-left
+    //     after the previous step. Both differences in dragPointerDelta() are
+    //     taken over the same interval, so the compositor's own application delay
+    //     cancels and the ideal advances by the pointer's real movement - exactly
+    //     the step, never half of it and never a stale reading's worth.
+    QPoint idealTopLeft = grabTopLeft;
+    QPoint pushedTopLeft = grabTopLeft; // P_k, the top-left pushed before this sample
+    QPoint previousSample = pointerAtGrab - grabTopLeft; // s_0, the reading at the grab
+    QPoint previousPushed = grabTopLeft; // P_0
 
+    QPoint pointer = pointerAtGrab;
     for (const QPoint &step : steps) {
         pointer += step;
+        const QPoint surfaceNow = pushedTopLeft; // P_k
+        const QPoint sample = pointer - surfaceNow; // s_k = G_k - P_k
 
-        // What the platform reports with the surface sitting where we last put
-        // it: the pointer's position inside the surface now, less the one it had
-        // when the grab began. The compositor has applied our pushes - exactly
-        // what the live log showed.
-        const QPoint reportedDelta = (pointer - pushedTopLeft) - (pointerAtGrab - grabTopLeft);
+        idealTopLeft += dragPointerDelta(sample, previousSample, surfaceNow, previousPushed);
 
-        pushedTopLeft = draggedBoxTopLeft(pushedTopLeft, reportedDelta);
+        previousSample = sample;
+        previousPushed = surfaceNow;
+        pushedTopLeft = idealTopLeft;
 
-        // 1:1: the box is where the pointer's real movement puts it, not halfway.
-        QCOMPARE(pushedTopLeft, grabTopLeft + (pointer - pointerAtGrab));
+        QCOMPARE(idealTopLeft, grabTopLeft + (pointer - pointerAtGrab));
     }
 
-    // Negative control, the regression guard for this very bug. The old rule
-    // applied the reported movement to the grab-time top-left,
-    // grabTopLeft + reportedDelta, so it kept re-adding the surface's own
-    // movement and its lag grew by half of every step: the box ends up about
-    // half the trip behind. Same steps, but each reported value is now read
-    // against the top-left the old rule itself had pushed - the live bug - so
-    // the run diverges exactly as it did on screen.
-    QPoint oldTopLeft = grabTopLeft;
+    // 9b. The failure this rewrite is about, as a negative control. The previous
+    //     rule kept the movement reported since the grab as a value and added it
+    //     again on every poll to the top-left the last push had put there,
+    //     pushed += (s_k - s_0). While the pointer moves that is 1:1; a pointer
+    //     that stops is the failure. Model the field exactly: the pointer moved
+    //     1 px since the grab and then stopped, so the reading freezes - and
+    //     because the platform sends no new motion event it stays frozen however
+    //     far we push. The poll runs on at 8 ms, so the frozen movement is added
+    //     over and over.
+    const QPoint frozenDelta(1, 0); // the frozen reading in the log, 1 px
+    QPoint buggyTopLeft = grabTopLeft;
+    for (int poll = 0; poll < 150; ++poll) {
+        buggyTopLeft += frozenDelta; // the old pushed += (s_k - s_0)
+    }
+    // +150 px with the pointer standing still: this is the box flying off screen.
+    QCOMPARE(buggyTopLeft - grabTopLeft, QPoint(150, 0));
+
+    // The rewrite, handed the same frozen sample again and again, moves nothing:
+    // the sample is unchanged, so the caller takes no step, and the movement the
+    // arithmetic would compute is zero besides.
+    QCOMPARE(dragPointerDelta(previousSample, previousSample, pushedTopLeft, pushedTopLeft), QPoint(0, 0));
+
+    // 9c. The half-speed failure, the other negative control. Applying the
+    //     reading's change to the top-left captured at grab time counts the
+    //     surface's own movement twice. Same steps, but each reading is now taken
+    //     against the top-left the grab-time rule itself had pushed - the live
+    //     bug - so the run diverges exactly as it did on screen.
+    QPoint grabBasedTopLeft = grabTopLeft;
     pointer = pointerAtGrab;
     for (const QPoint &step : steps) {
         pointer += step;
-        const QPoint reportedDelta = (pointer - oldTopLeft) - (pointerAtGrab - grabTopLeft);
-        oldTopLeft = grabTopLeft + reportedDelta;
+        const QPoint reportedDelta = (pointer - grabBasedTopLeft) - (pointerAtGrab - grabTopLeft);
+        grabBasedTopLeft = grabTopLeft + reportedDelta;
     }
 
-    // The old rule is about half the pointer's travel from the grab - 811
-    // against 1622 on x, as in the log. The relation is approximate in general
-    // (the lag grows by half a step each event), so allow a pixel or two.
-    const QPoint oldTravel = oldTopLeft - grabTopLeft;
+    // It is about half the pointer's travel from the grab - 811 against 1622 on
+    // x, as in the log. The relation is approximate in general (the lag grows by
+    // half a step each event), so allow a pixel or two.
+    const QPoint oldTravel = grabBasedTopLeft - grabTopLeft;
     const QPoint realTravel = pointer - pointerAtGrab;
     QVERIFY(qAbs(oldTravel.x() - realTravel.x() / 2) <= 2);
     QVERIFY(qAbs(oldTravel.y() - realTravel.y() / 2) <= 2);
