@@ -27,9 +27,10 @@ in the background.
 - Shows the current line, its translation when the source has one, and the
   lines after it, dimmed.
 - Follows the configuration while it runs: font, size, colour and outline,
-  how many upcoming lines to show, which screen edge and how far from it,
-  click-through, which output to land on, the lyric offset, and which lyric
-  sources to ask, in which order.
+  how many upcoming lines to show, where it sits — which edge, which side of
+  the screen, how far from it, or dragged somewhere by hand — click-through,
+  which output to land on, the lyric offset, and which lyric sources to ask,
+  in which order.
 - Says what the lyrics are doing whenever there are none: the tray tooltip and
   the settings window tell "still looking" apart from "none for this song" and
   from "the lookup failed".
@@ -122,7 +123,8 @@ same reason it would never be displayed: it cannot follow the music.
 
 The tray icon is the way in when the overlay is click-through and out of the
 taskbar: left click shows or hides the overlay, and the menu reopens the
-settings window, opens the search window, adjusts the offset, or quits.
+settings window, opens the search window, adjusts where the overlay sits and
+how large its text is, shifts the offset, or quits.
 
 The settings window edits every key and writes each change immediately, so a
 change reaches the running overlay as it is made. What can be set, with
@@ -135,6 +137,22 @@ The lyrics are cached under `QStandardPaths::CacheLocation`; see `cacheDir()`
 in [src/lyrics/lyriccache.cpp](src/lyrics/lyriccache.cpp). The lyrics you pinned
 yourself are not in there — they are a decision, not a copy, and they survive
 clearing the cache.
+
+### Moving and resizing it by hand
+
+**Adjust position and size** in the tray menu lets you drag the overlay instead
+of typing numbers: a frame and four corner handles appear, dragging the text
+moves it, dragging a handle scales it, and `Esc` — or that same tray item —
+finishes. Placement is anchored, so the text grows away from the edge it is
+pinned to; releasing near the middle of the screen snaps it back to being
+horizontally centred, which is the position that survives a font size change.
+
+While the mode is on, the overlay takes the pointer and, only so that `Esc` can
+reach it, the keyboard. That is the price of being click-through the rest of the
+time, which is why the mode is entered and left deliberately. What a drag writes
+is the very setting the settings window edits; nothing about the mode itself is
+stored, so quitting while adjusting never leaves an overlay that swallows
+clicks.
 
 ### Global shortcuts
 
