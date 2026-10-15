@@ -12,6 +12,7 @@
 #include <QRegion>
 #include <QSize>
 #include <QString>
+#include <QTimer>
 
 QT_BEGIN_NAMESPACE
 class QScreen;
@@ -34,7 +35,11 @@ namespace kshadowlrc
  *
  * In adjusting mode the surface instead takes pointer input, asks for keyboard
  * interactivity OnDemand so Esc can arrive, and lets the user drag its position
- * and font size. That mode is runtime-only: it never reaches the settings file.
+ * and font size. That drag is driven by the window's own poll of the global
+ * cursor, not by QML's translation delta: the surface follows the pointer, so
+ * the pointer barely moves within the window and that signal is no trigger for
+ * a smooth drag (see m_dragPoll). That mode is runtime-only: it never reaches
+ * the settings file.
  */
 class OverlayWindow : public QQuickView
 {
@@ -135,6 +140,17 @@ public:
     }
 
     /*!
+     * Whether the drag's global-cursor poll is running. Exposed only so the
+     * poll's lifetime can be asserted without a compositor: offscreen the cursor
+     * cannot move, so a drag driven through the public API never sees the
+     * pointer change and the poll's own start/stop is read back here instead.
+     */
+    bool dragPolling() const
+    {
+        return m_dragPoll.isActive();
+    }
+
+    /*!
      * The box the placement maths run on when no drag is in flight: the text
      * box, raised to MinAdjustBox while adjusting so an empty overlay is still
      * grabbable. Never the padded surface, so the padding cannot leak into a
@@ -155,15 +171,21 @@ public:
      * Start a drag. \p handlesFont picks the font-size gesture; otherwise it
      * moves the box. The origin is taken from QCursor::pos() -- global screen
      * coordinates, never surface-local ones, because the surface follows the
-     * cursor and its own coordinates would barely move.
+     * cursor and its own coordinates would barely move. Also starts the poll that
+     * keeps reading that global cursor until the drag ends.
      */
     Q_INVOKABLE void beginDrag(bool handlesFont);
-    /*! Apply the drag to the placement or the font size. */
+    /*!
+     * Apply the drag to the placement or the font size from the current global
+     * cursor. Called by the drag poll every few milliseconds, and once
+     * immediately by QML's onActiveTranslationChanged. Recomputing while the
+     * pointer has not moved does no work: both setters compare before pushing.
+     */
     Q_INVOKABLE void updateDrag();
     /*!
-     * Finish the drag, reporting the result through the *Edited signals. A
-     * gesture that changed nothing reports nothing, so only a real edit reaches
-     * the settings.
+     * Finish the drag, stopping the poll and reporting the result through the
+     * *Edited signals. A gesture that changed nothing reports nothing, so only a
+     * real edit reaches the settings.
      */
     Q_INVOKABLE void endDrag();
 
@@ -261,6 +283,12 @@ private:
     Placement m_dragStartPlacement;
     QSize m_dragBox = QSize(1, 1);
     int m_dragStartFontSize = 0;
+
+    // Polls the global cursor while a drag is in flight. The surface follows the
+    // pointer, so QML's translation delta barely changes and cannot be the drag's
+    // trigger; this timer is. Started in beginDrag(), stopped in endDrag() and on
+    // a cancelled exit (Esc).
+    QTimer m_dragPoll;
 
     QString m_outputName;
     QScreen *m_screen = nullptr;

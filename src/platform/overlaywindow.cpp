@@ -13,6 +13,7 @@
 #include <QLoggingCategory>
 #include <QPoint>
 #include <QScreen>
+#include <QTimer>
 #include <qpa/qplatformnativeinterface.h>
 
 #include <wayland-client.h>
@@ -30,6 +31,15 @@ OverlayWindow::OverlayWindow(QWindow *parent)
     // No opaque plate: only the rendered text shows.
     setColor(Qt::transparent);
     setResizeMode(QQuickView::SizeRootObjectToView);
+
+    // While a drag is in flight, read the global cursor on a fast timer instead
+    // of waiting for QML's translation signal: the surface follows the pointer,
+    // so the pointer barely moves within the window and that signal fires only
+    // when the compositor's repositioning lags. updateDrag() itself is unchanged
+    // and stays the one place the gesture is applied.
+    m_dragPoll.setTimerType(Qt::PreciseTimer);
+    m_dragPoll.setInterval(8);
+    connect(&m_dragPoll, &QTimer::timeout, this, &OverlayWindow::updateDrag);
 
     m_layerWindow = LayerShellQt::Window::get(this);
     if (!m_layerWindow) {
@@ -278,6 +288,7 @@ void OverlayWindow::endAdjusting(bool commit)
             // Esc: drop the in-flight drag without reporting it. The settings
             // were never touched, so the caller re-applies the stored values.
             m_dragging = false;
+            m_dragPoll.stop();
         }
     }
 
@@ -319,6 +330,10 @@ void OverlayWindow::beginDrag(bool handlesFont)
         // the drag lasts so nothing resizes under the pointer.
         m_dragBox = adjustmentBox();
     }
+
+    // Take the drag over from QML's translation signal: read the global cursor
+    // ourselves until the drag ends.
+    m_dragPoll.start();
 }
 
 void OverlayWindow::updateDrag()
@@ -352,6 +367,8 @@ void OverlayWindow::endDrag()
         return;
     }
     m_dragging = false;
+    // The poll exists only to feed updateDrag() while a drag is in flight.
+    m_dragPoll.stop();
 
     // The release is the only moment anything reaches the settings, so no disk
     // write happens while the pointer is moving -- and a gesture that changed

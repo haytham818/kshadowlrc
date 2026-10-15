@@ -48,6 +48,7 @@ private Q_SLOTS:
     void motionlessClickEmitsNothing();
     void releasedDragWritesThePlacementOnce();
     void frozenSurfaceDuringPositionDrag();
+    void dragPollLivesExactlyAsLongAsTheDrag();
 };
 
 void OverlayWindowAdjustTest::enteringOverridesClickThroughAndKeyboard()
@@ -235,6 +236,54 @@ void OverlayWindowAdjustTest::frozenSurfaceDuringPositionDrag()
     // 80 px minimum height, plus the padding.
     overlay.endDrag();
     QCOMPARE(overlay.pushedSurfaceSize(), QSize(948, 128));
+}
+
+void OverlayWindowAdjustTest::dragPollLivesExactlyAsLongAsTheDrag()
+{
+    // 8. The drag is driven by the window's own poll of the global cursor, not
+    //    by QML's translation signal -- the surface follows the pointer, so that
+    //    signal cannot be the trigger. The poll must therefore live exactly as
+    //    long as the drag: on while a gesture is in flight, off the moment it is
+    //    released or cancelled, and never resurrected by a stray call.
+    OverlayWindow overlay;
+    QVERIFY(!overlay.dragPolling()); // never started
+
+    // A drag cannot begin outside adjusting mode, so it starts no poll.
+    overlay.beginDrag(false);
+    QVERIFY(!overlay.dragPolling());
+
+    overlay.beginAdjusting();
+
+    // Position gesture: on for the flight, off on release.
+    overlay.beginDrag(false);
+    QVERIFY(overlay.dragPolling());
+    overlay.endDrag();
+    QVERIFY(!overlay.dragPolling());
+
+    // A second release with no drag in flight must not resurrect it.
+    overlay.endDrag();
+    QVERIFY(!overlay.dragPolling());
+
+    // Font gesture: same lifetime, and a committing exit stops it.
+    overlay.beginDrag(true);
+    QVERIFY(overlay.dragPolling());
+    overlay.endAdjusting(true);
+    QVERIFY(!overlay.dragPolling());
+
+    // Esc with a gesture still in flight stops the poll too.
+    overlay.beginAdjusting();
+    overlay.beginDrag(false);
+    QVERIFY(overlay.dragPolling());
+    overlay.endAdjusting(false);
+    QVERIFY(!overlay.dragPolling());
+
+    // endAdjusting with no drag in flight, and a stray endDrag after it, leave
+    // the poll off.
+    overlay.beginAdjusting();
+    overlay.endAdjusting(true);
+    QVERIFY(!overlay.dragPolling());
+    overlay.endDrag();
+    QVERIFY(!overlay.dragPolling());
 }
 
 int main(int argc, char **argv)
