@@ -32,25 +32,26 @@ import org.kde.kirigami as Kirigami
  *
  * The tray can turn an adjusting mode on (`overlayWindow.adjusting`). While it
  * is on the window takes pointer input again, and this file draws a dashed frame
- * around the lyrics with a handle at each corner and one short hint: drag the
- * body to move the overlay, drag a corner to scale the lyric text, Esc to
- * finish.
+ * around the lyrics with a handle at each corner: drag the body to move the
+ * overlay, drag a corner to scale the lyric text, roll the wheel over it to size
+ * the text, Esc to finish.
  *
  * Every length that matters - where the frame sits, where the overlay lands, how
  * large the text becomes - belongs to the window and is worked out in C++ from
  * the global pointer position: the surface itself moves during a drag, so
- * surface-local coordinates would mean nothing here. The handlers below only say
- * that a drag started, moved or ended, and whether the grab was the body or a
- * handle. The size to draw while a corner is dragged arrives as
+ * surface-local coordinates would mean nothing here. The drag handlers below only
+ * say that a drag started, moved or ended, and whether the grab was the body or a
+ * handle; the wheel handler hands over the angle it saw and nothing else. The
+ * size to draw while a corner is dragged arrives as
  * `overlayWindow.adjustingFontSize` (0 when nothing is being scaled), and the
  * frame is inset `overlayWindow.adjustPadding` from the surface, which is where
  * the window keeps the room around the lyrics.
  *
  * The overlay has no plate behind it, so nothing drawn here may assume a dark
  * wallpaper: the frame is a light dashed line over a soft dark one, and the
- * handles and the hint carry their own translucent backing. With adjusting off
- * the whole block is invisible and takes no pointer input, so the surface stays
- * exactly as click-through as it has always been.
+ * handles carry their own translucent backing. With adjusting off the whole
+ * block is invisible and takes no pointer input, so the surface stays exactly as
+ * click-through as it has always been.
  */
 Item {
     id: root
@@ -181,9 +182,6 @@ Item {
         readonly property int frameInset: overlayWindow.adjustPadding
         readonly property int frameWidth: Math.max(1, width - frameInset * 2)
         readonly property int frameHeight: Math.max(1, height - frameInset * 2)
-        // The hint shares the bottom of the surface with the two bottom handles
-        // and keeps clear of them: half a grab area plus a little air.
-        readonly property int handleClearance: 24
 
         // Dragging the body moves the overlay to follow the pointer. target is
         // null on purpose: the window moves the surface itself, so the handler
@@ -206,6 +204,25 @@ Item {
                     overlayWindow.updateDrag()
                 }
             }
+        }
+
+        // The wheel sizes the text, and it hangs on this whole overlay rather
+        // than on the lyric block: with adjusting off the surface publishes a 1x1
+        // input region, so a pointer over the words delivers nothing to us, and
+        // widening that region to the lyric block would take the clicks the
+        // overlay has to pass through. It is enabled only while the mode is on,
+        // when the window has taken the full input region for the drags anyway.
+        //
+        // The angle is handed over exactly as it arrived: Qt counts 120 units per
+        // wheel notch, and turning that into a size - the 5 % step, the 1 pt
+        // floor, the 8..160 pt range, the leftover between notches - is the
+        // window's business (OverlayWindow::nudgeFontSize). Nothing is converted
+        // or clamped here.
+        WheelHandler {
+            objectName: "adjustWheel"
+            enabled: overlayWindow.adjusting
+
+            onWheel: (event) => overlayWindow.nudgeFontSize(event.angleDelta.y)
         }
 
         // The frame: a light dashed line drawn over a soft dark one, so the edge
@@ -264,56 +281,6 @@ Item {
                     x: adjustOverlay.frameInset
                     y: adjustOverlay.frameInset
                 }
-            }
-        }
-
-        // The one short hint, in its own dark pill so it reads over anything.
-        // It sits centred in the gutter under the frame. On the smallest surface
-        // there is (nothing playing: a 240x80 box) the sentence is wider than the
-        // frame, so it wraps and reaches up into the frame - which is empty then,
-        // and the pill is drawn under the handles so it never hides one.
-        Rectangle {
-            id: hint
-
-            objectName: "adjustHint"
-            readonly property int hPad: 10
-            readonly property int vPad: 3
-            // The width the sentence may wrap into: inside the frame, and clear
-            // of the corner handles.
-            readonly property int wrapWidth: Math.max(1, adjustOverlay.frameWidth - adjustOverlay.handleClearance * 2 - hPad * 2)
-            // One line's natural width, so a short hint in a wide box keeps a
-            // snug pill and only wraps when it has to.
-            readonly property int naturalWidth: Math.ceil(hintMetrics.advanceWidth)
-
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: Math.max(4, Math.round((adjustOverlay.frameInset - height) / 2))
-
-            width: Math.min(naturalWidth, wrapWidth) + hPad * 2
-            height: hintText.contentHeight + vPad * 2
-            radius: height / 2
-            color: Qt.rgba(0.0, 0.0, 0.0, 0.55)
-            border.width: 1
-            border.color: Qt.rgba(1.0, 1.0, 1.0, 0.3)
-
-            TextMetrics {
-                id: hintMetrics
-                font: hintText.font
-                text: hintText.text
-            }
-
-            Text {
-                id: hintText
-
-                objectName: "adjustHintText"
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: hint.vPad
-                width: hint.wrapWidth
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
-                text: i18n("drag to move · drag a corner to scale · Esc to finish")
-                color: Qt.rgba(1.0, 1.0, 1.0, 0.92)
-                font: Kirigami.Theme.smallFont
             }
         }
 

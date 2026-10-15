@@ -141,8 +141,9 @@ clearing the cache.
 
 **Adjust position and size** in the tray menu lets you drag the overlay instead
 of typing numbers: a frame and four corner handles appear, dragging the text
-moves it, dragging a handle scales it, and `Esc` — or that same tray item —
-finishes. A drag sets where the lyrics hang: their horizontal centre and their
+moves it, dragging a handle or rolling the wheel over the text scales it (5 % a
+notch, never less than a point), and `Esc` — or that same tray item — finishes. A
+drag sets where the lyrics hang: their horizontal centre and their
 top edge, each as a percentage of the screen, which are the two numbers the
 settings window shows. That point is what holds still. The line you are reading
 keeps its place while the lines under it come and go, and a longer line grows to

@@ -6,22 +6,28 @@
 // It loads the file on a bare QQmlEngine with three stand-ins - a `settings`, a
 // `lyricsController` and an `overlayWindow` - so the mode can be driven without
 // the sibling lane's C++ and without a screen: nothing here clicks, drags or
-// looks at anything. main.qml is an Item, not a Window, because the host puts it
-// into its own QQuickView, so it is built with a QQmlComponent rather than with
-// QQmlApplicationEngine.
+// looks at anything, and the only input it sends is a wheel event into an
+// offscreen window of its own. main.qml is an Item, not a Window, because the
+// host puts it into its own QQuickView, so it is built with a QQmlComponent
+// rather than with QQmlApplicationEngine; the item is then parented into a bare
+// QQuickWindow, because a WheelHandler is only ever reached through a scene.
 //
-// What is pinned is what a regression would break: that the frame, the four
-// corners and the hint are part of the item and are drawn only while the mode is
-// on; that no grab is armed while it is off, so the surface stays as
-// click-through as it was; that each handle sits on a corner one adjusting
-// padding inside the surface; that the drawn lyric line takes the live preview
-// size from overlayWindow while a corner is dragged and the configured size
-// otherwise, with the translation and upcoming sizes keeping their ratios; and
-// that Esc's path reaches the window's endAdjusting(false). The geometry is read
-// from the items themselves, never from a render, and the `frameInset` property
-// the container exposes is what the test compares the padding against.
+// What is pinned is what a regression would break: that the frame and the four
+// corners are part of the item and are drawn only while the mode is on; that no
+// grab is armed while it is off, so the surface stays as click-through as it
+// was; that a wheel event over the lyric block arrives at the window's
+// nudgeFontSize() carrying the raw angle the wheel reported (the step, the
+// limits and the leftover between notches are the window's, not QML's); that
+// each handle sits on a corner one adjusting padding inside the surface; that
+// the drawn lyric line takes the live preview size from overlayWindow while a
+// corner is dragged and the configured size otherwise, with the translation and
+// upcoming sizes keeping their ratios; and that Esc's path reaches the window's
+// endAdjusting(false). The geometry is read from the items themselves, never
+// from a render, and the `frameInset` property the container exposes is what the
+// test compares the padding against.
 //
-// The platform plugin is offscreen: no network, no GUI, nothing to click.
+// The platform plugin is offscreen: no network, no screen, and the one wheel
+// event goes to this test's own window, inside this process.
 
 #include <QFont>
 #include <QGuiApplication>
@@ -34,6 +40,7 @@
 #include <QQmlError>
 #include <QQuickItem>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QSizeF>
 #include <QStringList>
 #include <QTest>
@@ -55,11 +62,6 @@ static void initResources()
 
 namespace
 {
-
-// The hint this file pins, as written in src/qml/main.qml. The label carries an
-// objectName, so it is looked up through it rather than by text; keep the two in
-// step if the wording ever changes.
-const char kHint[] = "drag to move · drag a corner to scale · Esc to finish";
 
 /*!
  * Stand-in for kshadowlrc::KShadowLrcSettings, the object the host injects as
@@ -162,8 +164,10 @@ private:
 
 /*!
  * Stand-in for kshadowlrc::OverlayWindow for the adjusting interface: the mode,
- * the live preview size, the padding, and the four drag calls. Every call is
- * recorded, so the test can tell a wired grab from one that only exists.
+ * the live preview size, the padding, the four drag calls and the wheel's font
+ * nudge. Every call is recorded, so the test can tell a wired grab from one that
+ * only exists - and the angle a wheel event carried from one the handler
+ * computed itself.
  *
  * It clears the live preview when the mode goes off, exactly as the frozen
  * interface says the window does ("0 when not scaling"), so the drawn size can
@@ -240,6 +244,14 @@ public:
         m_endsAdjusting.append(keep);
     }
 
+    // The wheel's font nudge, as OverlayWindow::nudgeFontSize: the angle is the
+    // raw event.angleDelta.y, 120 units per notch. Recorded untouched, so a
+    // value the test reads back is one QML passed through and nothing else.
+    Q_INVOKABLE void nudgeFontSize(int angleDelta)
+    {
+        m_fontNudges.append(angleDelta);
+    }
+
     QList<QSizeF> contentSizes() const
     {
         return m_contentSizes;
@@ -255,6 +267,11 @@ public:
         return m_endsAdjusting;
     }
 
+    QList<int> fontNudges() const
+    {
+        return m_fontNudges;
+    }
+
 Q_SIGNALS:
     void adjustingChanged();
     void adjustingFontSizeChanged();
@@ -267,6 +284,7 @@ private:
     int m_updates = 0;
     int m_ends = 0;
     QList<bool> m_endsAdjusting;
+    QList<int> m_fontNudges;
 };
 
 } // namespace
@@ -283,7 +301,7 @@ private Q_SLOTS:
     void drawsNothingWhileNotAdjusting();
     void drawsTheFrameAndHandlesWhileAdjusting();
     void theLyricSizeFollowsTheLivePreview();
-    void theHintOnlyAppearsWhileAdjusting();
+    void theWheelReachesTheWindow();
     void escapeReachesTheWindow();
 
 private:
@@ -301,6 +319,10 @@ private:
     StubLyricsController m_controller;
     StubOverlayWindow m_overlay;
     QList<QQmlError> m_reported;
+    // The window the item is parented into. A wheel event is only ever delivered
+    // to a handler through a scene, so the one input this file sends needs one;
+    // it stays offscreen and nothing is rendered from it.
+    QQuickWindow m_window;
 };
 
 QObject *OverlayAdjustQmlTest::byObjectName(const QString &name) const
@@ -308,9 +330,9 @@ QObject *OverlayAdjustQmlTest::byObjectName(const QString &name) const
     return m_root ? m_root->findChild<QObject *>(name) : nullptr;
 }
 
-// Visibility as it is drawn with no window to ask: the item's own flag and every
-// ancestor's. QQuickItem::isVisible() needs a window and would say false even
-// while adjusting, so the flags are walked here instead.
+// Visibility as it is drawn: the item's own flag and every ancestor's. The flag
+// is walked rather than item->isVisible() called, so a check reads the `visible`
+// the file binds (overlayWindow.adjusting) and not a window's idea of exposure.
 bool OverlayAdjustQmlTest::shown(QObject *object) const
 {
     if (object == nullptr) {
@@ -376,6 +398,18 @@ void OverlayAdjustQmlTest::initTestCase()
 
     m_component = new QQmlComponent(&m_engine, QUrl(QStringLiteral("qrc:/qml/main.qml")), &m_engine);
     m_root = m_component->create();
+
+    // The wheel assertion drives a real event, and a handler is only ever handed
+    // one through a scene: the item is put into a window whole - same tree, same
+    // bindings - sized as the smallest surface the overlay ever has (240x80, the
+    // window's minAdjustBox), and shown offscreen. Nothing is rendered from it.
+    auto *item = qobject_cast<QQuickItem *>(m_root);
+    QVERIFY2(item != nullptr, "main.qml creates an item");
+    m_window.resize(240, 80);
+    item->setParentItem(m_window.contentItem());
+    item->setSize(QSizeF(m_window.width(), m_window.height()));
+    m_window.show();
+    QVERIFY2(item->isVisible(), "the item is visible in the window, so a handler can be delivered to");
 }
 
 void OverlayAdjustQmlTest::cleanupTestCase()
@@ -425,11 +459,9 @@ void OverlayAdjustQmlTest::drawsNothingWhileNotAdjusting()
 
     QObject *overlay = byObjectName(QStringLiteral("adjustOverlay"));
     QObject *frame = byObjectName(QStringLiteral("adjustFrame"));
-    QObject *hint = byObjectName(QStringLiteral("adjustHint"));
-    QVERIFY2(overlay != nullptr && frame != nullptr && hint != nullptr, "the adjusting block is part of the item");
+    QVERIFY2(overlay != nullptr && frame != nullptr, "the adjusting block is part of the item");
     QVERIFY2(!shown(overlay), "the adjusting block is not drawn while the mode is off");
     QVERIFY2(!shown(frame), "no frame while the mode is off");
-    QVERIFY2(!shown(hint), "no hint while the mode is off");
 
     const QStringList handles{QStringLiteral("adjustHandleTopLeft"),
                               QStringLiteral("adjustHandleTopRight"),
@@ -445,6 +477,12 @@ void OverlayAdjustQmlTest::drawsNothingWhileNotAdjusting()
     // no grab is armed, so the surface is exactly as click-through as it was.
     QVERIFY2(handlerCount(true) == 0, "no drag handler is armed while the mode is off");
     QVERIFY2(handlerCount(false) == 5, "the body grab and the four corner grabs all exist while the mode is off");
+
+    // The wheel is part of the block and is deaf while the mode is off: a wheel
+    // event must never be listened for on a click-through surface.
+    QObject *wheel = byObjectName(QStringLiteral("adjustWheel"));
+    QVERIFY2(wheel != nullptr && wheel->inherits("QQuickWheelHandler"), "the adjusting block carries the wheel");
+    QVERIFY2(!wheel->property("enabled").toBool(), "no wheel event is listened for while the mode is off");
 
     // And the lyrics keep the configured size.
     QCOMPARE(m_root->property("primaryPointSize").toInt(), m_settings.fontSize());
@@ -465,11 +503,9 @@ void OverlayAdjustQmlTest::drawsTheFrameAndHandlesWhileAdjusting()
 
     QObject *overlay = byObjectName(QStringLiteral("adjustOverlay"));
     QObject *frame = byObjectName(QStringLiteral("adjustFrame"));
-    QObject *hint = byObjectName(QStringLiteral("adjustHint"));
-    QVERIFY2(overlay != nullptr && frame != nullptr && hint != nullptr, "the adjusting block is part of the item");
+    QVERIFY2(overlay != nullptr && frame != nullptr, "the adjusting block is part of the item");
     QVERIFY2(shown(overlay), "the adjusting block is drawn while the mode is on");
     QVERIFY2(shown(frame), "the frame is drawn while the mode is on");
-    QVERIFY2(shown(hint), "the hint is drawn while the mode is on");
 
     // The block fills the surface, so the frame is inset from the surface itself.
     QCOMPARE(overlay->property("width").toReal(), item->width());
@@ -509,10 +545,6 @@ void OverlayAdjustQmlTest::drawsTheFrameAndHandlesWhileAdjusting()
     QObject *bodyGrab = byObjectName(QStringLiteral("adjustBodyDrag"));
     QVERIFY2(bodyGrab != nullptr && bodyGrab->inherits("QQuickDragHandler"), "the body carries a grab of its own");
     QVERIFY2(bodyGrab->property("enabled").toBool(), "the body grab is armed while the mode is on");
-
-    // The hint stays inside the surface it shares the bottom of with the handles.
-    QVERIFY2(hint->property("width").toReal() <= item->width(), "the hint does not overflow the surface");
-    QVERIFY2(hint->property("height").toReal() > 0, "the hint has a drawn size");
 }
 
 void OverlayAdjustQmlTest::theLyricSizeFollowsTheLivePreview()
@@ -561,29 +593,43 @@ void OverlayAdjustQmlTest::theLyricSizeFollowsTheLivePreview()
     QCOMPARE(m_root->property("primaryPointSize").toInt(), configured);
 }
 
-void OverlayAdjustQmlTest::theHintOnlyAppearsWhileAdjusting()
+void OverlayAdjustQmlTest::theWheelReachesTheWindow()
 {
     QVERIFY(m_root != nullptr);
 
-    QObject *hint = byObjectName(QStringLiteral("adjustHint"));
-    QObject *hintText = byObjectName(QStringLiteral("adjustHintText"));
-    QVERIFY2(hint != nullptr && hintText != nullptr, "the hint is part of the item");
+    // The handler the block carries, found by its objectName like the handles.
+    QObject *wheel = byObjectName(QStringLiteral("adjustWheel"));
+    QVERIFY2(wheel != nullptr && wheel->inherits("QQuickWheelHandler"), "the adjusting block carries a wheel handler");
 
-    setAdjusting(false);
-    QVERIFY2(!shown(hint), "no hint while the mode is off");
+    // The pointer is put over the middle of the lyric block, not near the frame:
+    // that is why the handler hangs on the whole adjusting overlay - a scroll
+    // over the words has to reach the window, where the input region is.
+    auto *overlay = qobject_cast<QQuickItem *>(byObjectName(QStringLiteral("adjustOverlay")));
+    QVERIFY2(overlay != nullptr, "the adjusting block is part of the item");
+    const QPointF overTheLyrics = overlay->mapToScene(QPointF(overlay->width() / 2, overlay->height() / 2));
 
     setAdjusting(true);
-    QVERIFY2(shown(hint), "the hint is drawn while the mode is on");
-    QCOMPARE(hintText->property("text").toString(), QString::fromUtf8(kHint));
+    QVERIFY2(wheel->property("enabled").toBool(), "the wheel is listened to while the mode is on");
 
-    // One hint, and it says how to move, scale and finish - nothing else is
-    // added to the overlay while the mode is on.
-    int hints = 0;
-    const auto children = m_root->findChildren<QObject *>();
-    for (QObject *child : children) {
-        hints += child->inherits("QQuickText") && child->property("text").toString() == QString::fromUtf8(kHint) ? 1 : 0;
-    }
-    QCOMPARE(hints, 1);
+    // One notch up and one down: 120 units is a notch in Qt's angleDelta, and the
+    // angle is what the window is handed - it is not turned into a size here.
+    QTest::wheelEvent(&m_window, overTheLyrics, QPoint(0, 120));
+    QTest::wheelEvent(&m_window, overTheLyrics, QPoint(0, -120));
+    const QList<int> aNotchEachWay{120, -120};
+    QCOMPARE(m_overlay.fontNudges(), aNotchEachWay);
+
+    // A small odd angle arrives exactly as the wheel reported it too: the step,
+    // the limits and the leftover between notches are all the window's, so
+    // nothing may be rounded, scaled or clamped on the way through.
+    QTest::wheelEvent(&m_window, overTheLyrics, QPoint(0, 37));
+    const QList<int> andOneOddOne{aNotchEachWay + QList<int>{37}};
+    QCOMPARE(m_overlay.fontNudges(), andOneOddOne);
+
+    // With the mode off the wheel goes deaf with the rest of the block, and the
+    // surface takes no pointer input again.
+    setAdjusting(false);
+    QTest::wheelEvent(&m_window, overTheLyrics, QPoint(0, 120));
+    QCOMPARE(m_overlay.fontNudges(), andOneOddOne);
 }
 
 void OverlayAdjustQmlTest::escapeReachesTheWindow()
